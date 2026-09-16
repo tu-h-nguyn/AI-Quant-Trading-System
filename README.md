@@ -1,5 +1,7 @@
 # AI Quant Trading System
 
+[![CI](https://github.com/tu-h-nguyn/AI-Quant-Trading-System/actions/workflows/ci.yml/badge.svg)](https://github.com/tu-h-nguyn/AI-Quant-Trading-System/actions/workflows/ci.yml) [![Research](https://github.com/tu-h-nguyn/AI-Quant-Trading-System/actions/workflows/research.yml/badge.svg)](https://github.com/tu-h-nguyn/AI-Quant-Trading-System/actions/workflows/research.yml)
+
 A research-grade, end-to-end AI quantitative trading laboratory focused on one question: **does a leakage-aware machine-learning signal add value out of sample after trading frictions, relative to simple trading rules?**
 
 > Research and educational software only. Not investment advice and not intended for live trading.
@@ -42,7 +44,7 @@ Key safeguards include:
 - walk-forward refitting from independent estimator clones;
 - configurable gap/embargo for labels with forward horizons;
 - features computed from current/past information only;
-- portfolio weights estimated from trailing windows and lagged before return application;
+- portfolio weights estimated from trailing observations and lagged before return application;
 - transaction costs charged on turnover;
 - explicit comparison against non-ML baselines;
 - moving-block bootstrap diagnostics for dependent daily returns;
@@ -93,6 +95,12 @@ After a successful run:
 - `reports/figures/` — equity, drawdown, turnover, calibration, rolling-Sharpe, and feature-importance plots.
 
 The flagship report is intentionally designed so the central claim can be **supported, weakened, or rejected by the observed evidence**. A model that fails to beat a simple baseline is a valid research result; the repository does not assume profitability in advance.
+
+## How to read the results
+
+Start with `flagship_aggregate_results.csv`, then inspect the per-asset table. The relevant comparison is not a single headline return: check predictive AUC, CAGR, Sharpe, Sortino, drawdown, turnover, and the behavior across assets. A useful result should remain interpretable after costs and should not depend on one unusually favorable asset or period.
+
+The bootstrap interval in the report is a dependence-aware diagnostic for mean daily returns. It should be read alongside subperiod and per-asset behavior, not as a guarantee of future performance.
 
 ## Methodology notes
 
