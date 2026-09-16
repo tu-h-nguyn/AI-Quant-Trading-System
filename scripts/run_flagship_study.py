@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 
 import pandas as pd
-import yaml
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -28,10 +27,7 @@ def _models(random_state: int) -> dict[str, Pipeline]:
         "Logistic": Pipeline(
             [
                 ("scaler", StandardScaler()),
-                (
-                    "model",
-                    LogisticRegression(max_iter=1000, random_state=random_state),
-                ),
+                ("model", LogisticRegression(max_iter=1000, random_state=random_state)),
             ]
         ),
         "XGBoost": Pipeline(
@@ -67,14 +63,14 @@ def _run_signal_backtest(
     df: pd.DataFrame,
     signal: pd.Series,
     config: dict,
-) -> tuple[dict, pd.Series, pd.Series]:
+) -> tuple[dict, pd.Series]:
     result = backtest(
         df.loc[signal.index],
         signal,
         float(config["backtest"]["transaction_cost_bps"]),
         float(config["backtest"]["initial_capital"]),
     )
-    return result.metrics, result.returns, result.positions
+    return result.metrics, result.returns
 
 
 def main() -> None:
@@ -85,11 +81,12 @@ def main() -> None:
         config["model"],
         config["research"],
     )
+    symbols = list(data_cfg["symbols"])
 
     rows: list[dict] = []
     return_series: dict[tuple[str, str], pd.Series] = {}
 
-    for symbol in data_cfg["symbols"]:
+    for symbol in symbols:
         df = load_symbol_data(symbol, ROOT / "data" / "raw")
         X, y, _ = build_feature_frame(
             df,
@@ -99,12 +96,11 @@ def main() -> None:
             feature_cfg["moving_average_slow"],
             model_cfg["horizon"],
         )
-        oos_start = max(
-            int(research_cfg["walk_forward_min_train_size"]) + int(research_cfg["walk_forward_gap"]),
-            1,
-        )
-        prediction_start = X.index[oos_start] if len(X) > oos_start else X.index[-1]
-        oos_index = X.index[X.index >= prediction_start]
+        min_train = int(research_cfg["walk_forward_min_train_size"])
+        gap = int(research_cfg["walk_forward_gap"])
+        if len(X) <= min_train + gap:
+            raise ValueError(f"Not enough observations for walk-forward study: {symbol}")
+        oos_index = X.index[min_train + gap :]
 
         baselines = {
             "Buy & Hold": pd.Series(1.0, index=oos_index, name="signal"),
@@ -112,7 +108,7 @@ def main() -> None:
             "MA Crossover": (X.loc[oos_index, "ma_ratio"] > 0).astype(float).rename("signal"),
         }
         for strategy, signal in baselines.items():
-            metrics, returns, positions = _run_signal_backtest(df, signal, config)
+            metrics, returns = _run_signal_backtest(df, signal, config)
             rows.append(
                 {
                     "symbol": symbol,
@@ -129,11 +125,11 @@ def main() -> None:
                 X,
                 y,
                 test_window=int(research_cfg["walk_forward_test_window"]),
-                min_train_size=int(research_cfg["walk_forward_min_train_size"]),
-                gap=int(research_cfg["walk_forward_gap"]),
+                min_train_size=min_train,
+                gap=gap,
             )
             signal = probability_to_signal(probability, float(model_cfg["threshold"]))
-            metrics, returns, positions = _run_signal_backtest(df, signal, config)
+            metrics, returns = _run_signal_backtest(df, signal, config)
             rows.append(
                 {
                     "symbol": symbol,
@@ -149,6 +145,7 @@ def main() -> None:
     aggregate_rows: list[dict] = []
     for strategy in detail["strategy"].unique():
         series = [r for (symbol, name), r in return_series.items() if name == strategy]
+        subset = detail.loc[detail["strategy"] == strategy]
         if not series:
             continue
         portfolio_returns = pd.concat(series, axis=1).mean(axis=1).sort_index().fillna(0.0)
@@ -164,6 +161,8 @@ def main() -> None:
             {
                 "strategy": strategy,
                 **metrics,
+                "turnover": float(subset["turnover"].mean()),
+                "model_auc_mean": float(subset["model_auc"].mean()),
                 "mean_daily_return_bootstrap_ci_low": float(ci_low),
                 "mean_daily_return_bootstrap_ci_high": float(ci_high),
                 "n_assets": len(series),
@@ -179,6 +178,7 @@ def main() -> None:
     detail.to_csv(detail_path, index=False)
     aggregate.to_csv(aggregate_path, index=False)
 
+    universe_text = ", ".join(symbols)
     lines = [
         "# Flagship AI Quant Research Study",
         "",
@@ -186,24 +186,25 @@ def main() -> None:
         "",
         "## Experimental design",
         "",
-        "- Universe: SPY, QQQ, IWM, TLT, GLD.",
+        f"- Universe: {universe_text}.",
         "- Frequency: daily observations.",
         "- Features: lagged returns, rolling volatility, moving-average structure, and volume change.",
         f"- Label horizon: {model_cfg['horizon']} trading days.",
-        f"- OOS evaluation: walk-forward refits every {research_cfg['walk_forward_test_window']} days with a {research_cfg['walk_forward_gap']}-day embargo.",
-        f"- Minimum training history: {research_cfg['walk_forward_min_train_size']} observations.",
+        f"- OOS evaluation: walk-forward refits every {research_cfg['walk_forward_test_window']} days with a {gap}-day embargo.",
+        f"- Minimum training history: {min_train} observations.",
         f"- Transaction cost: {config['backtest']['transaction_cost_bps']} bps per unit turnover.",
         "- Threshold is fixed ex ante at the configured value; it is not optimized on the OOS sample.",
-        "- Reported aggregate portfolio is the equal-weight average of per-asset strategy returns.",
+        "- Aggregate portfolio = equal-weight average of per-asset OOS strategy returns.",
         "",
         "## Aggregate OOS results",
         "",
-        "| Strategy | CAGR | Sharpe | Sortino | Max Drawdown | Turnover | OOS observations |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Strategy | CAGR | Sharpe | Sortino | Max Drawdown | Turnover | Mean AUC | OOS observations |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in aggregate.to_dict(orient="records"):
+        auc = "—" if pd.isna(row["model_auc_mean"]) else f"{row['model_auc_mean']:.3f}"
         lines.append(
-            f"| {row['strategy']} | {row['cagr']:.2%} | {row['sharpe']:.3f} | {row['sortino']:.3f} | {row['max_drawdown']:.2%} | {row['turnover']:.2f} | {row['n_oos_observations']} |"
+            f"| {row['strategy']} | {row['cagr']:.2%} | {row['sharpe']:.3f} | {row['sortino']:.3f} | {row['max_drawdown']:.2%} | {row['turnover']:.2f} | {auc} | {row['n_oos_observations']} |"
         )
 
     lines += [
