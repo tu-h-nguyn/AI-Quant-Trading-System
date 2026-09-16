@@ -11,7 +11,11 @@ from quant_system.data.loader import load_symbol_data
 from quant_system.data.panel import build_price_panel, returns_panel
 from quant_system.evaluation.benchmark import benchmark_returns, relative_metrics
 from quant_system.evaluation.experiment import save_experiment
-from quant_system.evaluation.robustness import percentile_interval, block_bootstrap_mean, subperiod_summary
+from quant_system.evaluation.robustness import (
+    block_bootstrap_mean,
+    percentile_interval,
+    subperiod_summary,
+)
 from quant_system.portfolio.optimization import min_variance_weights, risk_parity_weights
 from quant_system.portfolio.rolling import apply_weights, rolling_weight_schedule
 
@@ -19,11 +23,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> None:
-    config = yaml.safe_load((ROOT / "configs" / "default.yaml").read_text(encoding="utf-8"))
+    config = yaml.safe_load(
+        (ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")
+    )
     symbols = config["data"]["symbols"]
     frames = {s: load_symbol_data(s, ROOT / "data" / "raw") for s in symbols}
     prices = build_price_panel(frames)
-    returns = returns_panel(prices).dropna(how="all").dropna(how="all")
+    returns = returns_panel(prices).dropna(how="all")
 
     method = config["portfolio"]["method"]
     cap = float(config["portfolio"]["max_weight"])
@@ -31,20 +37,24 @@ def main() -> None:
     rebalance = int(config["research"]["rebalance_every"])
     benchmark = config["research"]["benchmark"]
 
-    optimizer = lambda x: (
-        risk_parity_weights(x.dropna(), max_weight=cap)
-        if method == "risk_parity"
-        else min_variance_weights(x.dropna(), max_weight=cap)
-    )
+    def optimizer(window: pd.DataFrame) -> pd.Series:
+        clean = window.dropna()
+        if method == "risk_parity":
+            return risk_parity_weights(clean, max_weight=cap)
+        return min_variance_weights(clean, max_weight=cap)
+
     weights = rolling_weight_schedule(returns, optimizer, lookback, rebalance)
     strategy_returns, turnover, _ = apply_weights(
-        returns, weights, float(config["backtest"]["transaction_cost_bps"])
+        returns,
+        weights,
+        float(config["backtest"]["transaction_cost_bps"]),
     )
     strategy_metrics = summary(strategy_returns)
     strategy_metrics["turnover"] = float(turnover.sum())
 
     bench = benchmark_returns(returns, benchmark).reindex(strategy_returns.index).fillna(0.0)
-    strategy_metrics.update({f"benchmark_relative_{k}": v for k, v in relative_metrics(strategy_returns, bench).items()})
+    relative = relative_metrics(strategy_returns, bench)
+    strategy_metrics.update({f"benchmark_relative_{k}": v for k, v in relative.items()})
 
     bootstrap = block_bootstrap_mean(
         strategy_returns,
