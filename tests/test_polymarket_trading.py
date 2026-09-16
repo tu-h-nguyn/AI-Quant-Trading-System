@@ -297,6 +297,43 @@ def test_exit_configuration_is_validated():
         _config(stop_loss_move=0.0)
 
 
+def test_resolution_risk_tightens_the_gate():
+    panel = _panel(n_markets=40, label=1, price=0.40)
+    probability = pd.Series(0.50, index=panel.index)
+    safe = run_backtest(panel, probability, _config(min_edge=0.03))
+    risky = run_backtest(panel, probability, _config(min_edge=0.03, resolution_risk=0.15))
+    assert len(risky.trades) < len(safe.trades)
+
+
+def test_a_failed_resolution_pays_the_recovery_value_not_the_outcome():
+    panel = _panel(n_markets=60, label=1, price=0.40)
+    result = run_backtest(
+        panel, pd.Series(0.95, index=panel.index), _config(resolution_risk=0.5)
+    )
+    payoffs = set(result.trades["payoff"].round(6))
+    assert 0.0 in payoffs  # some markets failed to resolve on merit
+    assert 1.0 in payoffs  # the rest paid the true outcome
+
+
+def test_which_markets_fail_does_not_depend_on_unrelated_settings():
+    panel = _panel(n_markets=60, label=1, price=0.40)
+    probability = pd.Series(0.95, index=panel.index)
+    first = run_backtest(panel, probability, _config(resolution_risk=0.3))
+    second = run_backtest(panel, probability, _config(resolution_risk=0.3, bankroll=50_000.0))
+    failed = lambda run: set(run.trades.loc[run.trades["payoff"] == 0.0, "market_id"])  # noqa: E731
+    smaller, larger = sorted((failed(first), failed(second)), key=len)
+    # Changing the bankroll changes which markets are traded, but never which
+    # ones the resolver botched.
+    assert smaller <= larger
+
+
+def test_resolution_settings_are_validated():
+    with pytest.raises(ValueError):
+        _config(resolution_risk=1.5)
+    with pytest.raises(ValueError):
+        _config(resolution_recovery=-0.1)
+
+
 def _live_markets():
     fixture = simulate_arbitrage_snapshot(seed=7)
     markets = [replace(m, end_date=NOW + timedelta(days=30)) for m in fixture.markets]

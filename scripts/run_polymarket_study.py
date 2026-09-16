@@ -47,6 +47,7 @@ from quant_system.polymarket.market_making import (
     sweep_uninformed_fill_rate,
 )
 from quant_system.polymarket.metrics import forecast_report
+from quant_system.polymarket.pricing import max_tolerable_resolution_risk
 from quant_system.polymarket.model import (
     default_model,
     market_anchored_boosted_model,
@@ -183,6 +184,9 @@ def main() -> None:
         drawdown_floor=float(risk_cfg["drawdown_floor"]),
         one_trade_per_market=bool(risk_cfg["one_trade_per_market"]),
         min_notional=float(risk_cfg["min_notional"]),
+        resolution_risk=float(risk_cfg["resolution_risk"]),
+        resolution_recovery=float(risk_cfg["resolution_recovery"]),
+        resolution_seed=int(model_cfg["random_state"]),
     )
 
     tilt = baseline_tilt(trade_config)
@@ -264,6 +268,7 @@ def main() -> None:
 
     results = pd.DataFrame(rows)
     velocity = _capital_velocity_study(config, frame.loc[X.index], forecasts, trade_config)
+    resolution = _resolution_risk_study(config, frame.loc[X.index], forecasts, trade_config)
     making = _market_making_study(config, frame.loc[X.index], forecasts)
     report_dir = ROOT / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -271,6 +276,8 @@ def main() -> None:
     results.to_csv(results_path, index=False)
     velocity_path = report_dir / "polymarket_capital_velocity.csv"
     velocity.to_csv(velocity_path, index=False)
+    resolution_path = report_dir / "polymarket_resolution_risk.csv"
+    resolution.to_csv(resolution_path, index=False)
     making_path = report_dir / "polymarket_market_making.csv"
     pd.concat(
         [sweep.assign(fair_value=name) for name, sweep in making.items()], ignore_index=True
@@ -307,6 +314,7 @@ def main() -> None:
         folds=folds,
         making=making,
         velocity=velocity,
+        resolution=resolution,
     )
 
     record = save_experiment(
@@ -380,6 +388,31 @@ def _capital_velocity_study(
     return pd.DataFrame(rows)
 
 
+def _resolution_risk_study(
+    config: dict,
+    frame: pd.DataFrame,
+    forecasts: dict[str, pd.Series],
+    base_config: TradeConfig,
+) -> pd.DataFrame:
+    """Re-run the strategy assuming settlement is unreliable at various rates.
+
+    Resolution risk works mainly by shutting trades down rather than by
+    degrading the ones that survive: discounting the forecast pushes marginal
+    positions below the edge gate. The trade count is therefore the robust
+    reading here, and the P&L at high assumed risk rests on too few settlements
+    to interpret.
+    """
+    probability = forecasts.get("Market-anchored linear")
+    if probability is None or probability.empty:
+        return pd.DataFrame()
+    rows = []
+    for risk in config["risk"]["resolution_risk_sweep"]:
+        settings = replace(base_config, resolution_risk=float(risk))
+        result = run_backtest(frame, probability, settings)
+        rows.append({"resolution_risk": float(risk), **result.summary})
+    return pd.DataFrame(rows)
+
+
 def _market_making_study(
     config: dict,
     frame: pd.DataFrame,
@@ -450,6 +483,7 @@ def _write_report(
     folds: pd.DataFrame,
     making: dict[str, pd.DataFrame],
     velocity: pd.DataFrame,
+    resolution: pd.DataFrame,
 ) -> Path:
     """Write the research narrative, tables, and the caveats they depend on."""
     median_price = float(price.median())
@@ -629,6 +663,61 @@ def _write_report(
             "A rule that raises profit per capital-year while lowering ROI per "
             "trade is doing exactly what it should. One that raises both is "
             "suspicious: early exit cannot manufacture edge, only recycle it.",
+        ]
+
+    if not resolution.empty:
+        baseline_trades = resolution["n_trades"].iloc[0]
+        lines += [
+            "",
+            "## Resolution risk",
+            "",
+            "A prediction market pays out on what the resolver decides, not on "
+            "what happened. Questions get settled on technicalities, disputed, or "
+            "voided. That risk is charged here twice: the forecast is discounted "
+            "for it before sizing, and the simulation realizes it at the same rate.",
+            "",
+            "### How much can an edge absorb",
+            "",
+            "This table is analytic rather than simulated, so it carries no "
+            "sampling noise. It reads: for a position entered at each price with "
+            f"the configured {trade_config.min_edge:.0%} edge, the settlement "
+            "failure rate at which expected value reaches zero.",
+            "",
+            "| Entry price | Forecast | Max tolerable resolution risk |",
+            "|---:|---:|---:|",
+        ]
+        for entry in (0.10, 0.25, 0.50, 0.75, 0.90):
+            forecast = min(entry + trade_config.min_edge, 0.99)
+            tolerable = max_tolerable_resolution_risk(
+                forecast, entry, trade_config.fee_bps, trade_config.resolution_recovery
+            )
+            lines.append(f"| {entry:.2f} | {forecast:.2f} | {tolerable:.1%} |")
+        lines += [
+            "",
+            "Expensive contracts are the fragile ones. The same "
+            f"{trade_config.min_edge:.0%} edge tolerates several times more "
+            "settlement failure at a ten-cent entry than at ninety, because at "
+            "ninety there is almost nothing above the entry price left to win. A "
+            "strategy concentrated in high-priced favourites is betting on the "
+            "resolver as much as on the outcome.",
+            "",
+            "### What it does to the strategy",
+            "",
+            "| Assumed resolution risk | Trades | Total profit | ROI per trade |",
+            "|---:|---:|---:|---:|",
+        ]
+        for row in resolution.to_dict(orient="records"):
+            lines.append(
+                f"| {row['resolution_risk']:.0%} | {row['n_trades']:.0f} | "
+                f"{row['total_profit']:+,.0f} | "
+                f"{_fmt(row['roi_on_capital'], '+.4f')} |"
+            )
+        lines += [
+            "",
+            f"Read the trade count, not the P&L. The gate rejects more positions "
+            f"as the assumed risk rises -- from {baseline_trades:.0f} trades at "
+            f"zero down the column -- and the profit figures at the bottom rest "
+            "on a sample too small to carry a conclusion.",
         ]
 
     lines += [

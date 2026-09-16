@@ -118,6 +118,60 @@ def shrink_probability(
     return (1.0 - shrinkage) * q + shrinkage * p
 
 
+def resolution_adjusted_probability(
+    probability: float,
+    resolution_risk: float,
+    recovery: float = 0.0,
+) -> float:
+    """Discount a forecast for the chance the market does not settle on merit.
+
+    A prediction market pays out on what the resolver decides, not on what
+    happened. Questions are settled on technicalities, disputed, or voided, and
+    the contract then pays something unrelated to the forecast. With probability
+    ``resolution_risk`` the payoff is ``recovery`` regardless of the outcome::
+
+        q_effective = (1 - risk) * q + risk * recovery
+
+    ``recovery`` defaults to **zero**, which is the only setting that makes this
+    a risk model rather than a second source of edge. A non-zero recovery pays
+    out more than a cheap contract cost, so under ``recovery=0.5`` a five-cent
+    longshot *gains* from resolution risk and a strategy optimized against it
+    learns to buy lottery tickets on the venue failing. That is an artifact of
+    assuming voids are independent of price, which they are not.
+
+    Set a non-zero recovery only to model a venue that demonstrably splits
+    voided markets, and read the result knowing it is optimistic.
+    """
+    if not 0.0 <= resolution_risk <= 1.0:
+        raise ValueError("resolution_risk must lie in [0, 1]")
+    q = validate_probability(probability)
+    rec = validate_probability(recovery, name="recovery")
+    return (1.0 - resolution_risk) * q + resolution_risk * rec
+
+
+def max_tolerable_resolution_risk(
+    probability: float,
+    price: float,
+    fee_bps: float = 0.0,
+    recovery: float = 0.0,
+) -> float:
+    """Resolution risk at which a position's expected value reaches zero.
+
+    Reads as: how unreliable can settlement be before this trade stops being
+    worth taking. At a thin edge the answer is often a few percent, which is why
+    a gate set just above the friction floor is not actually conservative.
+    """
+    cost = buy_cost_per_share(price, fee_bps)
+    q = validate_probability(probability)
+    rec = validate_probability(recovery, name="recovery")
+    if q <= cost:
+        return 0.0
+    if abs(q - rec) < 1e-12:
+        return 1.0
+    risk = (q - cost) / (q - rec)
+    return float(min(max(risk, 0.0), 1.0))
+
+
 def settlement_value(side: str, outcome: int) -> float:
     """Dollar settlement of one share of ``side`` given the realized outcome.
 

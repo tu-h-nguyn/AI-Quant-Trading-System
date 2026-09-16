@@ -45,6 +45,15 @@ risk:
   # price has converged earns nothing while its capital is unavailable to
   # anything else, but exiting pays the spread a second time -- so the study
   # runs the same forecast under each rule rather than picking one.
+  # Probability that a market settles on something other than its merits: a
+  # technicality, a dispute, a void. Applied both when sizing (the forecast is
+  # discounted) and at settlement (the simulation realizes it at that rate).
+  # Recovery must stay at zero to keep this a cost: a non-zero recovery pays a
+  # cheap contract more than it cost, and the strategy would learn to buy
+  # longshots betting on the venue failing.
+  resolution_risk: 0.0
+  resolution_recovery: 0.0
+  resolution_risk_sweep: [0.0, 0.01, 0.02, 0.05, 0.10]
   exit_rules:
     - name: "Hold to settlement"
       exit_edge_fraction: null

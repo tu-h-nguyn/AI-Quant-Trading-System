@@ -19,6 +19,7 @@ the caller is expected to have produced out of sample -- typically through
 
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -26,7 +27,12 @@ import pandas as pd
 
 from .kelly import drawdown_scaled_bankroll, size_position
 from .metrics import bankroll_summary, edge_realization, trade_summary
-from .pricing import MAX_PRICE, MIN_PRICE, taker_fee_per_share
+from .pricing import (
+    MAX_PRICE,
+    MIN_PRICE,
+    resolution_adjusted_probability,
+    taker_fee_per_share,
+)
 
 REQUIRED_PANEL_COLUMNS = ("market_id", "timestamp", "price", "label")
 
@@ -53,6 +59,16 @@ class TradeConfig:
     # to anything else, so exiting early trades a slice of the edge for velocity.
     exit_edge_fraction: float | None = None
     stop_loss_move: float | None = None
+    # Probability that a market settles on something other than its merits --
+    # a technicality, a dispute, a void. Applied twice: the forecast is
+    # discounted for it before sizing, and the simulation realizes it at that
+    # rate, so the assumption is both paid for and charged.
+    resolution_risk: float = 0.0
+    # Zero is the only value that keeps this a cost. A non-zero recovery pays a
+    # cheap contract more than it cost, so the strategy would learn to buy
+    # longshots betting on the venue failing.
+    resolution_recovery: float = 0.0
+    resolution_seed: int = 42
 
     def __post_init__(self) -> None:
         if self.bankroll <= 0:
@@ -65,6 +81,10 @@ class TradeConfig:
             raise ValueError("exit_edge_fraction must lie in [0, 1)")
         if self.stop_loss_move is not None and not 0.0 < self.stop_loss_move <= 1.0:
             raise ValueError("stop_loss_move must lie in (0, 1]")
+        if not 0.0 <= self.resolution_risk <= 1.0:
+            raise ValueError("resolution_risk must lie in [0, 1]")
+        if not 0.0 <= self.resolution_recovery <= 1.0:
+            raise ValueError("resolution_recovery must lie in [0, 1]")
 
 
 @dataclass
@@ -145,7 +165,8 @@ def run_backtest(
         # Settle first: capital released by a matured position is available to
         # the trade being considered at this same timestamp.
         bankroll, locked = _settle_due(
-            open_positions, now, bankroll, locked, settled, equity_index, equity_values
+            open_positions, now, bankroll, locked, settled, equity_index, equity_values,
+            settings,
         )
         peak = max(peak, bankroll)
 
@@ -176,9 +197,25 @@ def run_backtest(
         if sizing_bankroll <= 0 or available < settings.min_notional:
             continue
 
+        # Discount both sides for settlement that may not follow the merits,
+        # before any of the sizing gates see the forecast.
         candidates = (
-            ("yes", probability, yes_ask, market_price),
-            ("no", 1.0 - probability, no_ask, 1.0 - market_price),
+            (
+                "yes",
+                resolution_adjusted_probability(
+                    probability, settings.resolution_risk, settings.resolution_recovery
+                ),
+                yes_ask,
+                market_price,
+            ),
+            (
+                "no",
+                resolution_adjusted_probability(
+                    1.0 - probability, settings.resolution_risk, settings.resolution_recovery
+                ),
+                no_ask,
+                1.0 - market_price,
+            ),
         )
         best = None
         for side, side_probability, side_price, side_market in candidates:
@@ -236,6 +273,7 @@ def run_backtest(
         settled,
         equity_index,
         equity_values,
+        settings,
     )
 
     trades = pd.DataFrame(settled) if settled else _empty_trades()
@@ -379,6 +417,28 @@ def _trade_record(
     }
 
 
+def _realized_payoff(position: _OpenPosition, settings: TradeConfig) -> float:
+    """Settlement a position actually receives, including a failed resolution.
+
+    The draw is derived from the market id rather than from an iteration
+    counter, so the same market fails in the same runs regardless of how many
+    other positions were opened first. Without that, changing an unrelated
+    parameter would reshuffle which markets void and the comparison between two
+    configurations would be noise.
+    """
+    if settings.resolution_risk > 0 and _resolution_failed(
+        position.market_id, settings.resolution_seed, settings.resolution_risk
+    ):
+        return float(settings.resolution_recovery)
+    return float(position.label if position.side == "yes" else 1 - position.label)
+
+
+def _resolution_failed(market_id: str, seed: int, risk: float) -> bool:
+    """Stable per-market draw for whether settlement went off the merits."""
+    stream = zlib.crc32(f"{seed}:{market_id}".encode()) & 0xFFFFFFFF
+    return np.random.default_rng(stream).uniform() < risk
+
+
 def _settle_due(
     open_positions: list[_OpenPosition],
     now: pd.Timestamp,
@@ -387,6 +447,7 @@ def _settle_due(
     settled: list[dict],
     equity_index: list[pd.Timestamp],
     equity_values: list[float],
+    settings: TradeConfig,
 ) -> tuple[float, float]:
     """Settle every position matured at ``now``, releasing its capital."""
     still_open = []
@@ -394,7 +455,7 @@ def _settle_due(
         if position.settle_time > now:
             still_open.append(position)
             continue
-        payoff = position.label if position.side == "yes" else 1 - position.label
+        payoff = _realized_payoff(position, settings)
         proceeds = position.shares * float(payoff)
         profit = proceeds - position.capital
         bankroll += profit

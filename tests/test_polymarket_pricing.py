@@ -13,6 +13,8 @@ from quant_system.polymarket.pricing import (
     breakeven_probability,
     buy_cost_per_share,
     edge,
+    max_tolerable_resolution_risk,
+    resolution_adjusted_probability,
     roi_if_correct,
     settlement_value,
     shrink_probability,
@@ -34,6 +36,38 @@ def test_edge_and_roi_are_consistent_with_a_one_dollar_payoff():
     assert edge(0.55, 0.40) == pytest.approx(0.15)
     assert roi_if_correct(0.40) == pytest.approx(1.5)
     assert buy_cost_per_share(0.40, 100) == pytest.approx(0.404)
+
+
+def test_resolution_risk_is_always_a_cost_at_zero_recovery():
+    # A risk model that pays you is not a risk model. At the default recovery a
+    # discounted forecast must be below the original for every probability,
+    # including the cheap contracts a positive recovery would reward.
+    for probability in (0.05, 0.20, 0.50, 0.80, 0.95):
+        adjusted = resolution_adjusted_probability(probability, 0.10)
+        assert adjusted < probability
+
+
+def test_a_positive_recovery_rewards_cheap_contracts():
+    # Documented trap: under a 50% recovery a five-cent longshot gains from the
+    # venue failing, which is why zero is the default.
+    assert resolution_adjusted_probability(0.05, 0.10, recovery=0.5) > 0.05
+    assert resolution_adjusted_probability(0.95, 0.10, recovery=0.5) < 0.95
+
+
+def test_tolerable_resolution_risk_falls_as_the_entry_price_rises():
+    cheap = max_tolerable_resolution_risk(0.20, 0.10)
+    expensive = max_tolerable_resolution_risk(0.94, 0.90)
+    assert cheap > expensive
+    # An edge that does not exist tolerates no settlement failure at all.
+    assert max_tolerable_resolution_risk(0.40, 0.50) == 0.0
+
+
+def test_tolerable_resolution_risk_matches_the_closed_form():
+    # With zero recovery expected value is (1 - r) * q - c, so r* = 1 - c / q.
+    probability, price = 0.60, 0.50
+    assert max_tolerable_resolution_risk(probability, price) == pytest.approx(
+        1.0 - price / probability
+    )
 
 
 def test_settlement_pays_exactly_one_side():

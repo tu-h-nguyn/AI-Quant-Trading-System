@@ -224,6 +224,35 @@ what settlement can demand. A fill the cash balance cannot fund is declined and
 counted, and the report flags a run where that happened rather than letting an
 under-capitalized book quietly understate both its losses and its gains.
 
+### Resolution risk
+
+A prediction market pays out on what the resolver decides, not on what happened.
+Questions get settled on technicalities, disputed, or voided — and at a thin edge
+that is a first-order cost, not a footnote. It is charged twice: the forecast is
+discounted before sizing, and the simulation realizes failures at the same rate.
+
+The useful output is analytic, so it carries no sampling noise — for a position
+entered at each price with a 4% edge, the settlement failure rate at which
+expected value reaches zero:
+
+| Entry price | Max tolerable resolution risk |
+|---:|---:|
+| 0.10 | 28.6% |
+| 0.50 | 7.4% |
+| 0.90 | 4.3% |
+
+**Expensive contracts are the fragile ones.** At ninety cents there is almost
+nothing above the entry price left to win, so a small failure rate erases the
+whole trade. A book concentrated in high-priced favourites is betting on the
+resolver as much as on the outcome.
+
+One modelling trap is worth naming, because the first version of this had it:
+recovery on a failed resolution must be **zero**. Under a 50% recovery — which
+looks realistic, since voided markets often pay both sides half — a five-cent
+longshot *gains* from the venue failing, and a strategy optimized against that
+model learns to buy lottery tickets on bad resolution. A risk model that pays
+you is not a risk model.
+
 ### Sizing, frictions, and execution
 
 - Kelly sizing for a one-dollar payoff, `f* = (q - c) / (1 - c)` on the **all-in**

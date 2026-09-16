@@ -77,6 +77,36 @@ Exit reasons: Hold to settlement — 44 settled, 0 converged, 0 stopped; Exit at
 
 A rule that raises profit per capital-year while lowering ROI per trade is doing exactly what it should. One that raises both is suspicious: early exit cannot manufacture edge, only recycle it.
 
+## Resolution risk
+
+A prediction market pays out on what the resolver decides, not on what happened. Questions get settled on technicalities, disputed, or voided. That risk is charged here twice: the forecast is discounted for it before sizing, and the simulation realizes it at the same rate.
+
+### How much can an edge absorb
+
+This table is analytic rather than simulated, so it carries no sampling noise. It reads: for a position entered at each price with the configured 4% edge, the settlement failure rate at which expected value reaches zero.
+
+| Entry price | Forecast | Max tolerable resolution risk |
+|---:|---:|---:|
+| 0.10 | 0.14 | 28.6% |
+| 0.25 | 0.29 | 13.8% |
+| 0.50 | 0.54 | 7.4% |
+| 0.75 | 0.79 | 5.1% |
+| 0.90 | 0.94 | 4.3% |
+
+Expensive contracts are the fragile ones. The same 4% edge tolerates several times more settlement failure at a ten-cent entry than at ninety, because at ninety there is almost nothing above the entry price left to win. A strategy concentrated in high-priced favourites is betting on the resolver as much as on the outcome.
+
+### What it does to the strategy
+
+| Assumed resolution risk | Trades | Total profit | ROI per trade |
+|---:|---:|---:|---:|
+| 0% | 44 | +2,174 | +0.3282 |
+| 1% | 37 | +1,367 | +0.2234 |
+| 2% | 33 | +1,223 | +0.2344 |
+| 5% | 30 | +1,682 | +0.3664 |
+| 10% | 26 | +923 | +0.2164 |
+
+Read the trade count, not the P&L. The gate rejects more positions as the assumed risk rises -- from 44 trades at zero down the column -- and the profit figures at the bottom rest on a sample too small to carry a conclusion.
+
 ## Market making
 
 A taker pays the spread; a maker is paid it. On a venue quoting a few cents against a one-dollar payoff that is frequently larger than any forecast edge available, so it is the other half of the profitability question -- and it fails for a different reason.

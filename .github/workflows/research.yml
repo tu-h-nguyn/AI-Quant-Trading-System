@@ -73,7 +73,7 @@ jobs:
           git add reports/experiments/*.json
           git add reports/v5_research_report.md
           git add reports/polymarket_research_report.md reports/polymarket_results.csv
-          git add reports/polymarket_arbitrage.csv reports/polymarket_market_making.csv reports/polymarket_capital_velocity.csv
+          git add reports/polymarket_arbitrage.csv reports/polymarket_market_making.csv reports/polymarket_capital_velocity.csv reports/polymarket_resolution_risk.csv
           git add -f reports/figures/*.png
           if git diff --cached --quiet; then
             echo "No research artifact changes to publish."
@@ -97,4 +97,5 @@ jobs:
             reports/polymarket_arbitrage.csv
             reports/polymarket_market_making.csv
             reports/polymarket_capital_velocity.csv
+            reports/polymarket_resolution_risk.csv
             reports/figures/*.png
