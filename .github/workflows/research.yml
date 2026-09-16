@@ -17,7 +17,7 @@ jobs:
   research:
     if: "!contains(github.event.head_commit.message, '[skip research]')"
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,34 +35,49 @@ jobs:
       - name: Download market data
         run: python scripts/download_data.py
 
-      - name: Run V5 research report
+      - name: Run flagship OOS study
+        env:
+          GIT_COMMIT: ${{ github.sha }}
+        run: python scripts/run_flagship_study.py
+
+      - name: Run V5 diagnostics report
         env:
           GIT_COMMIT: ${{ github.sha }}
         run: python scripts/run_v5_report.py
 
-      - name: Run multi-asset research
+      - name: Run rolling portfolio research
         env:
           GIT_COMMIT: ${{ github.sha }}
         run: python scripts/run_research.py
+
+      - name: Run tests and lint
+        run: |
+          pytest
+          ruff check src scripts
 
       - name: Publish research artifacts
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add reports/v5_research_report.md reports/experiments/v5_model_diagnostics.json
-          git add -f reports/figures/v5_equity_curve.png reports/figures/v5_drawdown.png reports/figures/v5_turnover.png reports/figures/v5_rolling_sharpe.png reports/figures/v5_calibration.png reports/figures/v5_feature_importance.png
+          git add reports/flagship_research_report.md reports/flagship_results.csv reports/flagship_aggregate_results.csv
+          git add reports/experiments/*.json
+          git add reports/v5_research_report.md
+          git add -f reports/figures/*.png
           if git diff --cached --quiet; then
             echo "No research artifact changes to publish."
           else
-            git commit -m "chore: publish reproducible V5 research artifacts [skip ci] [skip research]"
+            git commit -m "chore: publish reproducible research artifacts [skip ci] [skip research]"
             git push
           fi
 
-      - name: Upload experiment bundle
+      - name: Upload full research bundle
         uses: actions/upload-artifact@v4
         with:
-          name: quant-research-v5
+          name: quant-research-flagship
           path: |
+            reports/flagship_research_report.md
+            reports/flagship_results.csv
+            reports/flagship_aggregate_results.csv
+            reports/experiments/*.json
             reports/v5_research_report.md
-            reports/experiments/v5_model_diagnostics.json
             reports/figures/*.png
