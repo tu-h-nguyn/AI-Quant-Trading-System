@@ -51,6 +51,27 @@ arbitrage:
   # verified partition and its "guaranteed" payout is not guaranteed.
   require_verified_groups: true
 
+market_making:
+  # Maker-side quoting. Unlike the taker strategies, profitability here is
+  # decided less by the spread quoted than by what fraction of fills come from
+  # flow that is not trading on information -- a property of the venue that no
+  # backtest on price history can measure. It is swept rather than assumed.
+  half_spread: 0.02
+  quote_size: 100.0
+  max_inventory: 400.0
+  inventory_skew: 1.0
+  # A maker quotes a chosen subset, not the whole venue; this bounds the capital
+  # the book can tie up at any one moment.
+  max_concurrent_markets: 50
+  maker_fee_bps: 0.0
+  uninformed_fill_rate: 0.30
+  # Quotes widen inside this many days of resolution, where flow is most informed.
+  widen_within_days: 2.0
+  widen_multiple: 2.0
+  sweep_rates: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0]
+  # Sized so the book is never capital-constrained; the report flags it if it is.
+  bankroll: 100000.0
+
 model:
   method: "isotonic"
   calibration_fraction: 0.30

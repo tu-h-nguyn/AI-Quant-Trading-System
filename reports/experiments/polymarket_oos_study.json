@@ -20,6 +20,29 @@
       "extra_slippage": 0.005,
       "fee_bps": 0.0
     },
+    "market_making": {
+      "bankroll": 100000.0,
+      "half_spread": 0.02,
+      "inventory_skew": 1.0,
+      "maker_fee_bps": 0.0,
+      "max_concurrent_markets": 50,
+      "max_inventory": 400.0,
+      "quote_size": 100.0,
+      "sweep_rates": [
+        0.0,
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.8,
+        1.0
+      ],
+      "uninformed_fill_rate": 0.3,
+      "widen_multiple": 2.0,
+      "widen_within_days": 2.0
+    },
     "model": {
       "anchor_alpha": "auto",
       "anchor_alpha_grid": [
@@ -101,5 +124,5 @@
     "n_strategies": 6,
     "panel_source": "simulation"
   },
-  "timestamp_utc": "2026-09-16T08:55:32.373463+00:00"
+  "timestamp_utc": "2026-09-16T12:24:54.573613+00:00"
 }

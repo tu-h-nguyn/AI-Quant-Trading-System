@@ -60,6 +60,46 @@ An edge gate accepts trades only in a narrow band of predicted edge, which leave
 | Market-anchored linear | -12.581 | 8.841 | -1.42 | 0.0460 | +0.0482 | +0.1376 |
 | Market-anchored boosted | -1.273 | 6.529 | -0.19 | 0.0007 | +0.0531 | +0.0577 |
 
+## Market making
+
+A taker pays the spread; a maker is paid it. On a venue quoting a few cents against a one-dollar payoff that is frequently larger than any forecast edge available, so it is the other half of the profitability question -- and it fails for a different reason.
+
+A resting quote is filled precisely when someone wants the other side, which is disproportionately when they know something. The simulation splits flow accordingly: a price move through a quote fills it and marks the position at the new price, and a configurable share of periods produce fills unrelated to any move. **All maker profit comes from that second group**, and its size is a property of the venue that price history cannot measure. It is therefore swept, not assumed.
+
+### Quoting around: Market price
+
+Break-even uninformed fill rate: **28.7%**. Below this share of benign flow the book loses money however tightly it quotes.
+
+| Uninformed fill rate | Fills | P&L | Quoted spread | Adverse selection | Capture ratio | Peak capital |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0% | 1013 | -1,845 | 2,026 | -3,871 | -0.911 | 4,900 |
+| 10% | 1190 | -1,189 | 2,380 | -3,569 | -0.499 | 5,100 |
+| 20% | 1367 | -231 | 2,734 | -2,965 | -0.085 | 5,600 |
+| 30% | 1551 | +34 | 3,102 | -3,068 | +0.011 | 6,000 |
+| 40% | 1722 | +451 | 3,444 | -2,993 | +0.131 | 7,000 |
+| 50% | 1912 | +1,911 | 3,824 | -1,913 | +0.500 | 6,800 |
+| 60% | 2093 | +3,482 | 4,186 | -704 | +0.832 | 5,600 |
+| 80% | 2464 | +4,564 | 4,928 | -364 | +0.926 | 5,700 |
+| 100% | 2848 | +5,690 | 5,696 | -6 | +0.999 | 0 |
+
+### Quoting around: Market-anchored linear
+
+**Profitable across the entire swept range, including with no benign flow at all.** A maker that makes money on purely informed flow is being paid for its forecast, not for its spread.
+
+| Uninformed fill rate | Fills | P&L | Quoted spread | Adverse selection | Capture ratio | Peak capital |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0% | 958 | +72 | 1,916 | -1,844 | +0.038 | 7,400 |
+| 10% | 1136 | +386 | 2,272 | -1,886 | +0.170 | 7,700 |
+| 20% | 1323 | +781 | 2,646 | -1,865 | +0.295 | 6,800 |
+| 30% | 1508 | +1,128 | 3,016 | -1,888 | +0.374 | 6,400 |
+| 40% | 1691 | +1,180 | 3,382 | -2,202 | +0.349 | 7,000 |
+| 50% | 1896 | +2,396 | 3,792 | -1,396 | +0.632 | 7,400 |
+| 60% | 2080 | +3,564 | 4,160 | -596 | +0.857 | 6,000 |
+| 80% | 2451 | +4,409 | 4,902 | -493 | +0.899 | 5,700 |
+| 100% | 2848 | +5,692 | 5,696 | -4 | +0.999 | 0 |
+
+Capture ratio is realized P&L over the spread that was quoted. One means every quoted cent was kept; zero or below means the flow took back more than the spread paid. Adverse selection is roughly constant across the sweep because it depends on how often the price moves, not on how much benign flow arrives alongside it.
+
 ## Structural arbitrage self-test
 
 The scanner was run against a synthetic snapshot containing 11 planted basket mispricings and reported 11. Because the planted set is known exactly, this checks the scanner for both false negatives and false positives; it says nothing about how many such baskets exist on the live venue. Run `scripts/scan_polymarket_arbitrage.py --source live` for that.

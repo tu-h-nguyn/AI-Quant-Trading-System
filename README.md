@@ -184,6 +184,46 @@ probabilities scores only about `+0.012` against a roughly efficient price. A
 model at `+0.004` has captured a third of everything available, not "almost
 nothing". The study reports the ceiling alongside every skill score.
 
+### 3. Market making — being paid the spread instead of paying it
+
+Everything above is taker-side: it crosses the spread and pays for immediacy. A
+maker is paid for it, and on a venue quoting a few cents against a one-dollar
+payoff that is frequently larger than any forecast edge available.
+
+It fails for a different reason than forecasting does. A resting quote is filled
+precisely when someone wants the other side, which is disproportionately when
+they know something — so a maker buys just before the price falls and sells just
+before it rises. `simulate_market_making` splits flow into two regimes to make
+that cost explicit rather than assuming it away:
+
+- **Informed flow** — a price move through a quote fills it, and the position is
+  marked at the new price immediately. The loss is automatic.
+- **Uninformed flow** — a configurable share of periods fill without any price
+  move. **All maker profit comes from this group**, and its size is a property of
+  the venue that price history cannot measure.
+
+So `uninformed_fill_rate` is swept, not assumed, and the report states the
+break-even condition instead of a point estimate. On the synthetic panel:
+
+| Quoting around | Break-even uninformed fill rate |
+|---|---|
+| Market price | ~29% |
+| Market-anchored model forecast | profitable at every rate, including 0% |
+
+That second row is the interesting one: quoting around a forecast roughly halves
+the adverse selection a maker pays, because the quote leans away from the moves
+that would otherwise run it over. A forecast edge is worth more to a maker than
+to a taker — the taker gets it only when the edge clears the spread, the maker
+collects the spread *and* the edge on every fill.
+
+Inventory is capped and quotes are skewed against it, quotes widen inside a
+configurable window before resolution where flow is most informed, concurrency
+is capped because a maker quotes a chosen subset rather than the whole venue,
+and a short YES position is collateralized at a dollar a share because that is
+what settlement can demand. A fill the cash balance cannot fund is declined and
+counted, and the report flags a run where that happened rather than letting an
+under-capitalized book quietly understate both its losses and its gains.
+
 ### Sizing, frictions, and execution
 
 - Kelly sizing for a one-dollar payoff, `f* = (q - c) / (1 - c)` on the **all-in**
@@ -219,7 +259,9 @@ sizing, frictions, settlement, leakage control, and capital accounting are wired
 together correctly — it is not evidence of edge on the real venue. Run
 `scripts/fetch_polymarket_data.py` to replace the panel with real settled
 markets; until then, the arbitrage scanners are the only component whose edge is
-provable rather than estimated.
+provable rather than estimated. The market-making results are a second layer of
+assumption on top of that: they depend on a flow composition the simulation
+cannot observe, which is why the break-even rate is reported rather than a P&L.
 
 One finding from the synthetic runs is worth stating because it sets a
 precondition for the whole track: **below roughly 2,500 settled markets the
@@ -260,6 +302,7 @@ src/quant_system/
     model.py                   market-anchored and calibrated estimators
     validation.py              resolution-aware out-of-sample splitting
     backtest.py                event-driven simulation with 0/1 settlement
+    market_making.py           two-sided quoting, inventory, adverse selection
     metrics.py                 skill-vs-price and bankroll diagnostics
     execution.py               risk-gated order planning and paper broker
     simulation.py              deterministic synthetic markets

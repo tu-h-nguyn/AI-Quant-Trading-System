@@ -39,6 +39,11 @@ from quant_system.polymarket.backtest import (
     theoretical_break_even_edge,
 )
 from quant_system.polymarket.features import build_snapshot_features, design_matrix
+from quant_system.polymarket.market_making import (
+    QuoteConfig,
+    break_even_uninformed_rate,
+    sweep_uninformed_fill_rate,
+)
 from quant_system.polymarket.metrics import forecast_report
 from quant_system.polymarket.model import (
     default_model,
@@ -256,10 +261,15 @@ def main() -> None:
         )
 
     results = pd.DataFrame(rows)
+    making = _market_making_study(config, frame.loc[X.index], forecasts)
     report_dir = ROOT / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     results_path = report_dir / "polymarket_results.csv"
     results.to_csv(results_path, index=False)
+    making_path = report_dir / "polymarket_market_making.csv"
+    pd.concat(
+        [sweep.assign(fair_value=name) for name, sweep in making.items()], ignore_index=True
+    ).to_csv(making_path, index=False)
 
     fixture = simulate_arbitrage_snapshot()
     scan = opportunities_frame(
@@ -290,6 +300,7 @@ def main() -> None:
         passthrough=passthrough,
         ceiling=ceiling,
         folds=folds,
+        making=making,
     )
 
     record = save_experiment(
@@ -314,6 +325,49 @@ def main() -> None:
     )
     print(f"\n{report_path.relative_to(ROOT)}")
     print(record.relative_to(ROOT))
+
+
+def _market_making_study(
+    config: dict,
+    frame: pd.DataFrame,
+    forecasts: dict[str, pd.Series],
+) -> dict[str, pd.DataFrame]:
+    """Sweep the maker's assumed flow mix, quoting around two fair values.
+
+    Quoting around the market price isolates the spread-versus-adverse-selection
+    trade-off with no informational advantage. Quoting around the model forecast
+    adds one. Running both makes it visible whether the forecast is worth
+    anything to a maker, which is a different question from whether it is worth
+    anything to a taker.
+    """
+    settings = config["market_making"]
+    rates = [float(rate) for rate in settings["sweep_rates"]]
+    quote_config = QuoteConfig(
+        half_spread=float(settings["half_spread"]),
+        quote_size=float(settings["quote_size"]),
+        max_inventory=float(settings["max_inventory"]),
+        inventory_skew=float(settings["inventory_skew"]),
+        max_concurrent_markets=int(settings["max_concurrent_markets"]),
+        maker_fee_bps=float(settings["maker_fee_bps"]),
+        uninformed_fill_rate=float(settings["uninformed_fill_rate"]),
+        widen_within_days=float(settings["widen_within_days"]),
+        widen_multiple=float(settings["widen_multiple"]),
+        seed=int(config["model"]["random_state"]),
+    )
+    bankroll = float(settings["bankroll"])
+
+    fair_values = {"Market price": None}
+    anchored = forecasts.get("Market-anchored linear")
+    if anchored is not None and not anchored.empty:
+        fair_values["Market-anchored linear"] = anchored
+
+    sweeps: dict[str, pd.DataFrame] = {}
+    for name, values in fair_values.items():
+        print(f"Market-making sweep quoting around {name} ...")
+        sweeps[name] = sweep_uninformed_fill_rate(
+            frame, rates, quote_config, values, bankroll
+        )
+    return sweeps
 
 
 def _fmt(value: float, spec: str = ".4f") -> str:
@@ -341,6 +395,7 @@ def _write_report(
     passthrough: list[str],
     ceiling: float,
     folds: pd.DataFrame,
+    making: dict[str, pd.DataFrame],
 ) -> Path:
     """Write the research narrative, tables, and the caveats they depend on."""
     median_price = float(price.median())
@@ -481,6 +536,75 @@ def _write_report(
         )
 
     lines += [
+        "",
+        "## Market making",
+        "",
+        "A taker pays the spread; a maker is paid it. On a venue quoting a few "
+        "cents against a one-dollar payoff that is frequently larger than any "
+        "forecast edge available, so it is the other half of the profitability "
+        "question -- and it fails for a different reason.",
+        "",
+        "A resting quote is filled precisely when someone wants the other side, "
+        "which is disproportionately when they know something. The simulation "
+        "splits flow accordingly: a price move through a quote fills it and marks "
+        "the position at the new price, and a configurable share of periods "
+        "produce fills unrelated to any move. **All maker profit comes from that "
+        "second group**, and its size is a property of the venue that price "
+        "history cannot measure. It is therefore swept, not assumed.",
+        "",
+    ]
+    for name, sweep in making.items():
+        break_even = break_even_uninformed_rate(sweep)
+        if np.isfinite(break_even):
+            verdict = (
+                f"Break-even uninformed fill rate: **{break_even:.1%}**. Below this "
+                "share of benign flow the book loses money however tightly it quotes."
+            )
+        elif (sweep["total_pnl"] > 0).all():
+            # Profitable with no benign flow at all means the quoted fair value
+            # is carrying the book, not the spread.
+            verdict = (
+                "**Profitable across the entire swept range, including with no "
+                "benign flow at all.** A maker that makes money on purely informed "
+                "flow is being paid for its forecast, not for its spread."
+            )
+        else:
+            verdict = (
+                "**Never profitable in the swept range.** No assumption about flow "
+                "composition inside 0-100% rescues this configuration."
+            )
+        lines += [
+            f"### Quoting around: {name}",
+            "",
+            verdict,
+            "",
+            "| Uninformed fill rate | Fills | P&L | Quoted spread | Adverse selection | Capture ratio | Peak capital |",
+            "|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        for row in sweep.to_dict(orient="records"):
+            lines.append(
+                f"| {row['uninformed_fill_rate']:.0%} | {row['n_fills']:.0f} | "
+                f"{row['total_pnl']:+,.0f} | {row['quoted_spread_value']:,.0f} | "
+                f"{row['adverse_selection_pnl']:+,.0f} | "
+                f"{_fmt(row['spread_capture_ratio'], '+.3f')} | "
+                f"{row['peak_committed_capital']:,.0f} |"
+            )
+        if sweep["declined_fills"].sum() > 0:
+            lines.append("")
+            lines.append(
+                "> The book ran out of cash during this sweep and declined fills. "
+                "Raise `market_making.bankroll` or lower `quote_size` / "
+                "`max_concurrent_markets`: these rows understate both the losses "
+                "and the gains."
+            )
+        lines.append("")
+
+    lines += [
+        "Capture ratio is realized P&L over the spread that was quoted. One means "
+        "every quoted cent was kept; zero or below means the flow took back more "
+        "than the spread paid. Adverse selection is roughly constant across the "
+        "sweep because it depends on how often the price moves, not on how much "
+        "benign flow arrives alongside it.",
         "",
         "## Structural arbitrage self-test",
         "",
