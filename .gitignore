@@ -18,3 +18,7 @@ data/polymarket/
 # Paper-trading account state and generated order plans
 reports/paper_account.json
 reports/polymarket_order_plan.json
+
+# Build artifacts
+build/
+dist/
