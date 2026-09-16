@@ -1,10 +1,25 @@
-from pathlib import Path
-import sys
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"src"))
-from quant_system.config import load_config
-from quant_system.data.downloader import download_ohlcv,save_symbol_data
+from __future__ import annotations
 
-def main():
- c=load_config("configs/default.yaml"); d=c["data"]; data=download_ohlcv(d["symbols"],d["start"],d.get("end"),d["interval"])
- for s,df in data.items(): print(save_symbol_data(df,s))
-if __name__=="__main__": main()
+from pathlib import Path
+
+from quant_system.config import load_config
+from quant_system.data.downloader import download_ohlcv, save_symbol_data
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def main() -> None:
+    config = load_config(ROOT / "configs" / "default.yaml")
+    data_cfg = config["data"]
+    frames = download_ohlcv(
+        data_cfg["symbols"],
+        data_cfg["start"],
+        data_cfg.get("end"),
+        data_cfg["interval"],
+    )
+    for symbol, frame in frames.items():
+        print(save_symbol_data(frame, symbol, ROOT / "data" / "raw"))
+
+
+if __name__ == "__main__":
+    main()
