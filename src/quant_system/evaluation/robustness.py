@@ -40,9 +40,24 @@ def block_bootstrap_mean(
     out = np.empty(n_bootstrap)
     for i in range(n_bootstrap):
         chosen = rng.choice(starts, size=n_blocks, replace=True)
-        sample = np.concatenate([values[s:s + block_size] for s in chosen])[: len(values)]
+        sample = np.concatenate([values[s : s + block_size] for s in chosen])[: len(values)]
         out[i] = sample.mean()
     return pd.Series(out, name="bootstrap_mean")
+
+
+def bootstrap_mean(
+    returns: pd.Series,
+    n_bootstrap: int = 2000,
+    block_size: int = 20,
+    seed: int = 42,
+) -> pd.Series:
+    """Backward-compatible alias for the moving-block bootstrap."""
+    return block_bootstrap_mean(
+        returns,
+        n_bootstrap=n_bootstrap,
+        block_size=block_size,
+        seed=seed,
+    )
 
 
 def percentile_interval(samples: pd.Series, alpha: float = 0.05) -> tuple[float, float]:
@@ -54,14 +69,18 @@ def percentile_interval(samples: pd.Series, alpha: float = 0.05) -> tuple[float,
 def subperiod_summary(returns: pd.Series, periods_per_year: int = 252) -> pd.DataFrame:
     """Return calendar-year diagnostics to expose parameter/regime instability."""
     rows = []
-    for period, r in returns.dropna().groupby(returns.dropna().index.year):
+    clean = returns.dropna()
+    for period, r in clean.groupby(clean.index.year):
         vol = r.std(ddof=1) * np.sqrt(periods_per_year)
-        rows.append({
-            "period": int(period),
-            "observations": int(len(r)),
-            "return": float((1 + r).prod() - 1),
-            "annualized_volatility": float(vol),
-            "sharpe": float(r.mean() / r.std(ddof=1) * np.sqrt(periods_per_year))
-            if r.std(ddof=1) > 0 else float("nan"),
-        })
+        rows.append(
+            {
+                "period": int(period),
+                "observations": int(len(r)),
+                "return": float((1 + r).prod() - 1),
+                "annualized_volatility": float(vol),
+                "sharpe": float(r.mean() / r.std(ddof=1) * np.sqrt(periods_per_year))
+                if r.std(ddof=1) > 0
+                else float("nan"),
+            }
+        )
     return pd.DataFrame(rows)
