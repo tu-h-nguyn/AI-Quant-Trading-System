@@ -328,7 +328,14 @@ Two things it gets right that a naive loop does not:
 Feature parity between training and scoring is enforced by building both frames
 through the same call: a model fitted with momentum columns cannot score a bare
 snapshot, and filling those columns with zeros would score every market as if
-its price had never moved.
+its price had never moved. A mismatch raises naming every missing column rather
+than a `KeyError` on the first one.
+
+The live path is unreachable from CI, so it is driven through a fake venue in
+`tests/test_polymarket_live_path.py` — market pagination, book fetching, price
+history, the settled-panel build, retry and rate-limit behaviour, and a full
+acquire → forecast → plan → paper-fill round trip. The first real run should not
+be the first time that code has executed.
 
 ### What this layer does *not* do
 

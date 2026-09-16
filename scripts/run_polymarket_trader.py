@@ -233,8 +233,18 @@ def forecast_live_markets(
     if live_X.empty:
         print("  no live market had enough history for a complete feature vector")
         return {}
-    live_X = live_X[X.columns]
-    probability = model.predict_proba(live_X)[:, 1]
+
+    # Feature parity is a correctness condition, not a convenience. Reindexing
+    # would fill an absent column with NaN and predict nonsense; selecting it
+    # raises a KeyError naming only the first offender. Say what is missing.
+    missing = [column for column in X.columns if column not in live_X.columns]
+    if missing:
+        raise ValueError(
+            "live markets are missing features the model was fitted on: "
+            f"{missing}. The settled panel and the live snapshot must carry the "
+            "same optional columns (book quotes, depth, volume, end dates)."
+        )
+    probability = model.predict_proba(live_X[X.columns])[:, 1]
 
     latest = (
         pd.DataFrame({"market_id": live_meta["market_id"], "probability": probability})

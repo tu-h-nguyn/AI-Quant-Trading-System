@@ -29,6 +29,20 @@ GAMMA_URL = "https://gamma-api.polymarket.com"
 CLOB_URL = "https://clob.polymarket.com"
 
 
+class PolymarketHTTPError(RuntimeError):
+    """A response the venue rejected outright, as opposed to a transient failure.
+
+    Kept as its own type so the retry loop can tell "your request was wrong"
+    from "the network hiccuped" by class rather than by matching the error text.
+    A string comparison there would turn every 4xx into four silent retries the
+    first time someone reworded the message.
+    """
+
+    def __init__(self, method: str, url: str, status_code: int, body: str = "") -> None:
+        super().__init__(f"{method} {url} failed with HTTP {status_code}: {body[:200]}")
+        self.status_code = status_code
+
+
 class HttpTransport(Protocol):
     """Minimal JSON transport, implemented by tests as an in-memory fake."""
 
@@ -79,15 +93,14 @@ class RequestsTransport:
                 )
                 if response.status_code < 400:
                     return response.json()
-                if response.status_code not in {429} and response.status_code < 500:
-                    raise RuntimeError(
-                        f"{method} {url} failed with HTTP {response.status_code}: "
-                        f"{response.text[:200]}"
+                if response.status_code != 429 and response.status_code < 500:
+                    raise PolymarketHTTPError(
+                        method, url, response.status_code, response.text
                     )
                 last_error = RuntimeError(f"HTTP {response.status_code} from {url}")
-            except Exception as error:  # noqa: BLE001 - retried below, re-raised after
-                if isinstance(error, RuntimeError) and "failed with HTTP" in str(error):
-                    raise
+            except PolymarketHTTPError:
+                raise  # the request itself was rejected; retrying cannot fix it
+            except Exception as error:  # noqa: BLE001 - transient, retried below
                 last_error = error
             if attempt < self.max_retries - 1:
                 time.sleep(self.backoff**attempt)
@@ -161,25 +174,36 @@ class PolymarketClient:
         return parse_book(payload, fallback_token_id=str(token_id))
 
     def order_books(self, token_ids: Sequence[str]) -> dict[str, OrderBook]:
-        """Batch book fetch; falls back to per-token requests if unsupported."""
+        """Books for every requested token, batching where the venue allows it.
+
+        A partial batch response is completed with individual requests rather
+        than returned as-is. Silently handing back a short dict would look like
+        a successful fetch while the risk gates quietly rejected every market
+        whose book went missing, shrinking the tradable universe with no signal
+        that anything had gone wrong.
+        """
         tokens = [str(token) for token in token_ids]
         if not tokens:
             return {}
+
+        books: dict[str, OrderBook] = {}
         try:
             payload = self.transport.post_json(
                 f"{self.clob_url}/books",
                 [{"token_id": token} for token in tokens],
             )
-            books = {
-                book.token_id: book
-                for book in (parse_book(item) for item in _as_records(payload))
-                if book.token_id
-            }
-            if books:
-                return books
-        except Exception:  # noqa: BLE001 - batch endpoint is an optimization only
-            pass
-        return {token: self.order_book(token) for token in tokens}
+            wanted = set(tokens)
+            for record in _as_records(payload):
+                book = parse_book(record)
+                if book.token_id in wanted:
+                    books[book.token_id] = book
+        except Exception:  # noqa: BLE001 - the batch endpoint is an optimization only
+            books = {}
+
+        for token in tokens:
+            if token not in books:
+                books[token] = self.order_book(token)
+        return books
 
     def price_history(
         self,

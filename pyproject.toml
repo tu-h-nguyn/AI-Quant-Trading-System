@@ -27,7 +27,10 @@ dev = ["pytest>=8,<9", "ruff>=0.6,<1"]
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# scripts/ is on the path so the operational entry points are testable: the
+# live data path is the one that cannot be run here and therefore the one that
+# most needs a test driven through a fake transport.
+pythonpath = ["src", "scripts"]
 addopts = "-q"
 
 [tool.ruff]
