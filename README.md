@@ -294,6 +294,42 @@ Exit rules are off by default so hold-to-settlement stays the baseline.
 python scripts/run_polymarket_study.py      # flagship study → reports/polymarket_research_report.md
 ```
 
+## Running it
+
+The research scripts answer whether an edge exists. `scripts/run_polymarket_trader.py`
+is what you would actually run — safe to invoke repeatedly, on a schedule or by
+hand, because the paper account persists between runs.
+
+```bash
+# self-contained, no network: settled history and open markets from one world
+python scripts/run_polymarket_trader.py --source simulation
+
+# replay the last stored snapshot, judged at the clock it was captured with
+python scripts/run_polymarket_trader.py --source snapshot
+
+# public data from the venue; orders still go only to the local ledger
+python scripts/run_polymarket_trader.py --source live --plan-only
+```
+
+Each run settles matured positions, acquires markets and books, fits the
+market-anchored model **on markets that have already settled**, scores the open
+ones, scans for structural arbitrage, builds a risk-gated plan, and records it in
+the paper account.
+
+Two things it gets right that a naive loop does not:
+
+- **The clock travels with the data.** A replayed snapshot is evaluated at the
+  moment it was captured, not at wall time — otherwise the resolution-window
+  gates reject markets that were tradable when the data was taken.
+- **The exposure cap belongs to the account, not the run.** Re-planning against
+  whatever cash is left adds another 20% every invocation and pushes a 20% limit
+  past 50% in three passes. The plan is told what is already committed.
+
+Feature parity between training and scoring is enforced by building both frames
+through the same call: a model fitted with momentum columns cannot score a bare
+snapshot, and filling those columns with zeros would score every market as if
+its price had never moved.
+
 ### What this layer does *not* do
 
 It never signs, funds, or submits an order. `build_order_plan` produces an
@@ -335,6 +371,7 @@ scripts/
   fetch_polymarket_data.py     Polymarket snapshots + resolved training panel
   scan_polymarket_arbitrage.py structural mispricing scanner
   run_polymarket_study.py      Polymarket OOS research experiment
+  run_polymarket_trader.py     operational loop: plan and paper-execute
 src/quant_system/
   data/                        acquisition/loading/panel construction
   features/                    feature engineering

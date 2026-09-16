@@ -245,6 +245,25 @@ class SnapshotStore:
 
     def load(self, name: str) -> Any:
         """Payload of the most recent snapshot for ``name``."""
+        return self._record(name).get("payload")
+
+    def captured_at(self, name: str) -> datetime | None:
+        """When the most recent snapshot was taken.
+
+        A replay has to be evaluated at the snapshot's own clock, not at wall
+        time: gates like "resolves too soon" would otherwise reject markets that
+        were perfectly tradable at the moment the data was captured.
+        """
+        stamp = self._record(name).get("captured_utc")
+        if not isinstance(stamp, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+    def _record(self, name: str) -> dict[str, Any]:
         path = self.latest(name)
         if path is None:
             raise FileNotFoundError(
@@ -252,7 +271,7 @@ class SnapshotStore:
                 "run scripts/fetch_polymarket_data.py first"
             )
         record = json.loads(path.read_text(encoding="utf-8"))
-        return record.get("payload") if isinstance(record, Mapping) else record
+        return record if isinstance(record, Mapping) else {"payload": record}
 
 
 def _levels(raw: Any) -> list[tuple[float, float]]:

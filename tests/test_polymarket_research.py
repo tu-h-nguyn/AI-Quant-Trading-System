@@ -136,6 +136,16 @@ def test_snapshot_store_round_trips(tmp_path):
         store.load("absent")
 
 
+def test_snapshot_records_the_clock_a_replay_must_be_judged_by(tmp_path):
+    # A replay evaluated at wall time would reject markets as "resolves too
+    # soon" that were perfectly tradable when the data was captured.
+    store = SnapshotStore(tmp_path)
+    store.save("markets", [{"id": "1"}])
+    captured = store.captured_at("markets")
+    assert captured is not None and captured.tzinfo is not None
+    assert (datetime.now(timezone.utc) - captured).total_seconds() < 60
+
+
 def _panel():
     rows = []
     for market in range(4):

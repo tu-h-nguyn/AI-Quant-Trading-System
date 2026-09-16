@@ -445,6 +445,83 @@ def test_paper_broker_refuses_orders_it_cannot_fund():
     assert (ledger["status"] == "rejected_insufficient_cash").any()
 
 
+def test_repeated_planning_cannot_ratchet_past_the_aggregate_cap():
+    markets, fixture = _live_markets()
+    forecasts = {m.market_id: 0.97 for m in markets}
+    limits = RiskLimits(max_total_exposure=0.20, max_orders=50)
+    broker = PaperBroker(bankroll=10_000)
+
+    for _ in range(4):
+        state = broker.state()
+        plan = build_order_plan(
+            markets, fixture.books, forecasts, broker.bankroll, limits,
+            as_of=NOW, committed_capital=state["committed_capital"],
+            available_cash=state["cash"],
+        )
+        broker.submit(plan)
+    # Planning against leftover cash each run would have compounded well past
+    # the limit; the cap belongs to the account.
+    assert broker.state()["committed_capital"] <= 0.20 * 10_000 + 1e-6
+
+
+def test_a_full_book_produces_an_empty_plan_with_a_reason():
+    markets, fixture = _live_markets()
+    forecasts = {m.market_id: 0.97 for m in markets}
+    limits = RiskLimits(max_total_exposure=0.20)
+    plan = build_order_plan(
+        markets, fixture.books, forecasts, 10_000, limits, as_of=NOW,
+        committed_capital=2_000, available_cash=8_000,
+    )
+    assert plan.orders == []
+    assert any("exposure budget" in entry["reason"] for entry in plan.skipped)
+
+
+def test_a_plan_is_capped_by_cash_as_well_as_by_exposure():
+    markets, fixture = _live_markets()
+    forecasts = {m.market_id: 0.97 for m in markets}
+    plan = build_order_plan(
+        markets, fixture.books, forecasts, 10_000,
+        RiskLimits(max_total_exposure=0.20, max_orders=50),
+        as_of=NOW, available_cash=300.0,
+    )
+    assert plan.total_notional <= 300.0 + 1e-6
+
+
+def test_paper_account_survives_a_save_and_reload(tmp_path):
+    markets, fixture = _live_markets()
+    forecasts = {m.market_id: 0.97 for m in markets}
+    plan = build_order_plan(markets, fixture.books, forecasts, 10_000, RiskLimits(), as_of=NOW)
+    broker = PaperBroker(bankroll=10_000)
+    broker.submit(plan)
+    path = broker.save(tmp_path / "account.json")
+
+    restored = PaperBroker.load(path)
+    assert restored.state() == broker.state()
+    assert len(restored.fills) == len(broker.fills)
+    assert sorted(restored.open_market_ids()) == sorted(broker.open_market_ids())
+
+
+def test_loading_a_missing_account_opens_a_fresh_one(tmp_path):
+    broker = PaperBroker.load(tmp_path / "absent.json", bankroll=777.0)
+    assert broker.bankroll == 777.0
+    assert broker.open_market_ids() == []
+
+
+def test_a_restored_account_settles_the_positions_it_was_carrying(tmp_path):
+    markets, fixture = _live_markets()
+    forecasts = {m.market_id: 0.97 for m in markets}
+    plan = build_order_plan(markets, fixture.books, forecasts, 10_000, RiskLimits(), as_of=NOW)
+    broker = PaperBroker(bankroll=10_000)
+    broker.submit(plan)
+    broker.save(tmp_path / "account.json")
+
+    restored = PaperBroker.load(tmp_path / "account.json")
+    first = plan.orders[0]
+    profit = restored.settle(first.market_id, 1 if first.side == "yes" else 0)
+    assert profit > 0
+    assert first.market_id not in restored.open_market_ids()
+
+
 def test_arbitrage_baskets_expand_into_their_legs():
     fixture = simulate_arbitrage_snapshot(seed=7)
     found = scan_markets(

@@ -162,18 +162,47 @@ def build_order_plan(
     limits: RiskLimits | None = None,
     fee_bps: float = 0.0,
     as_of: datetime | None = None,
+    committed_capital: float = 0.0,
+    available_cash: float | None = None,
 ) -> OrderPlan:
     """Turn per-market forecasts into a risk-gated, exposure-capped order plan.
 
     ``probabilities`` maps ``market_id`` to the forecast probability that the
     market's YES outcome occurs. Markets absent from the mapping are skipped
     rather than traded at the market's own price.
+
+    ``committed_capital`` is what the account already has working in open
+    positions. It matters because the aggregate exposure cap belongs to the
+    account, not to one invocation: a loop that re-plans against whatever cash
+    is left will happily add another 20% every run and ratchet a 20% limit past
+    50% in three passes. ``available_cash`` further caps the plan at what can
+    actually be funded, defaulting to the whole bankroll.
     """
     rules = limits or RiskLimits()
     now = as_of or datetime.now(timezone.utc)
     plan = OrderPlan(bankroll=float(bankroll))
     if bankroll <= 0:
         raise ValueError("bankroll must be positive")
+    if committed_capital < 0:
+        raise ValueError("committed_capital must be non-negative")
+
+    remaining_exposure = max(
+        rules.max_total_exposure - committed_capital / float(bankroll), 0.0
+    )
+    cash = float(bankroll) if available_cash is None else max(float(available_cash), 0.0)
+    if remaining_exposure <= 0 or cash < rules.min_notional:
+        plan.skipped.append(
+            {
+                "market_id": "*",
+                "reason": "no exposure budget left: open positions already fill the cap",
+            }
+        )
+        plan.notes = (
+            "Dry run: no order is transmitted.",
+            f"Aggregate cap {rules.max_total_exposure:.0%} already used by "
+            f"{committed_capital:,.2f} of committed capital.",
+        )
+        return plan
 
     candidates: list[OrderIntent] = []
     for market in markets:
@@ -197,17 +226,19 @@ def build_order_plan(
 
     scaled = allocate_exposure(
         {order.market_id: order.bankroll_fraction for order in candidates},
-        max_total_exposure=rules.max_total_exposure,
+        max_total_exposure=remaining_exposure,
     )
+    funded = 0.0
     for order in candidates:
         fraction = scaled[order.market_id]
-        notional = fraction * float(bankroll)
+        notional = min(fraction * float(bankroll), max(cash - funded, 0.0))
         if notional < rules.min_notional:
             plan.skipped.append(
                 {"market_id": order.market_id, "reason": "below min_notional after exposure cap"}
             )
             continue
-        plan.orders.append(_rescale(order, notional, fraction))
+        funded += notional
+        plan.orders.append(_rescale(order, notional, notional / float(bankroll)))
 
     plan.notes = (
         "Dry run: no order is transmitted. Prices are snapshot prices and can move.",
@@ -342,6 +373,61 @@ class PaperBroker:
 
     def ledger(self) -> pd.DataFrame:
         return pd.DataFrame(self.fills) if self.fills else pd.DataFrame(columns=["status"])
+
+    def save(self, path: str | Path) -> Path:
+        """Persist the account so a paper run can be resumed or audited.
+
+        An operational loop that forgets its positions between invocations is
+        not paper trading, it is a sequence of unrelated backtests. The whole
+        fill history is kept rather than a summary, because the only way to
+        check a live-ish run afterwards is to replay what it actually did.
+        """
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(
+                {
+                    "saved_utc": datetime.now(timezone.utc).isoformat(),
+                    "bankroll": self.bankroll,
+                    "fee_bps": self.fee_bps,
+                    "positions": [
+                        {"market_id": market_id, "side": side, **values}
+                        for (market_id, side), values in self.positions.items()
+                    ],
+                    "fills": self.fills,
+                },
+                indent=2,
+                default=str,
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    @classmethod
+    def load(cls, path: str | Path, bankroll: float = 10_000.0) -> PaperBroker:
+        """Restore a saved account, or open a fresh one if none exists yet."""
+        source = Path(path)
+        if not source.exists():
+            return cls(bankroll=bankroll)
+        record = json.loads(source.read_text(encoding="utf-8"))
+        broker = cls(
+            bankroll=float(record.get("bankroll", bankroll)),
+            fee_bps=float(record.get("fee_bps", 0.0)),
+            fills=list(record.get("fills", [])),
+        )
+        for entry in record.get("positions", []):
+            broker.positions[(str(entry["market_id"]), str(entry["side"]))] = {
+                "shares": float(entry["shares"]),
+                "capital": float(entry["capital"]),
+            }
+        return broker
+
+    def open_market_ids(self) -> list[str]:
+        """Markets with an open position, for the caller to check for settlement."""
+        seen: dict[str, None] = {}
+        for market_id, _ in self.positions:
+            seen.setdefault(market_id, None)
+        return list(seen)
 
     def state(self) -> dict[str, float]:
         return {
