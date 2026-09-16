@@ -3,18 +3,18 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-import yaml
 
 from quant_system.backtest.engine import backtest
+from quant_system.config import load_config
 from quant_system.data.loader import load_symbol_data
-from quant_system.evaluation.diagnostics import calibration_metrics, calibration_table, model_feature_importance, threshold_analysis
+from quant_system.evaluation.diagnostics import (
+    calibration_metrics,
+    calibration_table,
+    model_feature_importance,
+    threshold_analysis,
+)
 from quant_system.evaluation.experiment import save_experiment
-from quant_system.evaluation.reporting import build_markdown_report
-from quant_system.evaluation.robustness import rolling_sharpe
-from quant_system.features.core import build_feature_frame
-from quant_system.models.core import probability_to_signal, train_logistic
 from quant_system.evaluation.plots import (
     plot_calibration,
     plot_drawdown,
@@ -23,12 +23,16 @@ from quant_system.evaluation.plots import (
     plot_rolling_sharpe,
     plot_turnover,
 )
+from quant_system.evaluation.reporting import build_markdown_report
+from quant_system.evaluation.robustness import rolling_sharpe
+from quant_system.features.core import build_feature_frame
+from quant_system.models.core import probability_to_signal, train_logistic
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> None:
-    config = yaml.safe_load((ROOT / "configs" / "default.yaml").read_text(encoding="utf-8"))
+    config = load_config(ROOT / "configs" / "default.yaml")
     data_cfg, feature_cfg, model_cfg = config["data"], config["features"], config["model"]
     symbol = data_cfg["symbols"][0]
     df = load_symbol_data(symbol, ROOT / "data" / "raw")
@@ -57,16 +61,31 @@ def main() -> None:
     calib = calibration_metrics(y_test, probability)
     thresholds = threshold_analysis(y_test, probability, future_return)
     importance = model_feature_importance(model, columns)
-    rolling = rolling_sharpe(strategy.returns, window=min(252, max(20, len(strategy.returns) // 4)))
+    rolling = rolling_sharpe(
+        strategy.returns,
+        window=min(252, max(20, len(strategy.returns) // 4)),
+    )
 
     artifact_dir = ROOT / "reports" / "figures"
     plot_paths = {
-        "equity_curve": plot_equity(strategy.returns, df["close"].pct_change().reindex(strategy.returns.index), artifact_dir / "v5_equity_curve.png"),
+        "equity_curve": plot_equity(
+            strategy.returns,
+            df["close"].pct_change().reindex(strategy.returns.index),
+            artifact_dir / "v5_equity_curve.png",
+        ),
         "drawdown": plot_drawdown(strategy.returns, artifact_dir / "v5_drawdown.png"),
-        "turnover": plot_turnover(strategy.positions.diff().abs().fillna(0), artifact_dir / "v5_turnover.png"),
-        "rolling_sharpe": plot_rolling_sharpe(rolling, artifact_dir / "v5_rolling_sharpe.png"),
-        "calibration": plot_calibration(calib_table, artifact_dir / "v5_calibration.png"),
-        "feature_importance": plot_feature_importance(importance, artifact_dir / "v5_feature_importance.png"),
+        "turnover": plot_turnover(
+            strategy.positions.diff().abs().fillna(0), artifact_dir / "v5_turnover.png"
+        ),
+        "rolling_sharpe": plot_rolling_sharpe(
+            rolling, artifact_dir / "v5_rolling_sharpe.png"
+        ),
+        "calibration": plot_calibration(
+            calib_table, artifact_dir / "v5_calibration.png"
+        ),
+        "feature_importance": plot_feature_importance(
+            importance, artifact_dir / "v5_feature_importance.png"
+        ),
     }
     report = build_markdown_report(
         ROOT / "reports" / "v5_research_report.md",
