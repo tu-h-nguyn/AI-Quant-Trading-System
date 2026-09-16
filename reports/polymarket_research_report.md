@@ -23,24 +23,24 @@
 
 Skill is measured against the market price, not against a coin flip. A positive Brier skill score means the forecast carries information the price does not.
 
-**The achievable skill here is +0.01107.** That is what an oracle holding the true probabilities would score against this price series. Brier score on binary outcomes is dominated by the irreducible variance `q(1 - q)`, so skill against a roughly efficient price is always a few thousandths even when the economic edge is large. Read every number below as a fraction of that ceiling, not against 1.0.
+**The achievable skill here is +0.00991.** That is what an oracle holding the true probabilities would score against this price series. Brier score on binary outcomes is dominated by the irreducible variance `q(1 - q)`, so skill against a roughly efficient price is always a few thousandths even when the economic edge is large. Read every number below as a fraction of that ceiling, not against 1.0.
 
 | Strategy | Observations | Brier | Market Brier | Brier skill vs market | % of ceiling | Calibration error |
 |---|---:|---:|---:|---:|---:|---:|
-| Market price | 25000 | 0.20002 | 0.20002 | +0.00000 | +0.0 | 0.0064 |
-| Favourite | 25000 | 0.20775 | 0.20002 | -0.03866 | -349.2 | 0.0877 |
-| Longshot | 25000 | 0.20779 | 0.20002 | -0.03885 | -350.8 | 0.0428 |
-| Logistic (unanchored) | 17500 | 0.20252 | 0.19888 | -0.01832 | -165.4 | 0.0175 |
-| Market-anchored linear | 17500 | 0.19799 | 0.19888 | +0.00443 | +40.0 | 0.0115 |
-| Market-anchored boosted | 17500 | 0.19848 | 0.19888 | +0.00198 | +17.8 | 0.0087 |
+| Market price | 17500 | 0.19888 | 0.19888 | +0.00000 | +0.0 | 0.0076 |
+| Favourite | 17500 | 0.20630 | 0.19888 | -0.03731 | -376.5 | 0.0862 |
+| Longshot | 17500 | 0.20689 | 0.19888 | -0.04029 | -406.6 | 0.0460 |
+| Logistic (unanchored) | 17500 | 0.20252 | 0.19888 | -0.01832 | -184.8 | 0.0175 |
+| Market-anchored linear | 17500 | 0.19799 | 0.19888 | +0.00443 | +44.7 | 0.0115 |
+| Market-anchored boosted | 17500 | 0.19848 | 0.19888 | +0.00198 | +19.9 | 0.0087 |
 
 ## Trading results after frictions
 
 | Strategy | Trades | ROI on capital | Total return | Hit rate | Max drawdown | Mean trade return | 95% CI |
 |---|---:|---:|---:|---:|---:|---:|---|
 | Market price | 0 | — | — | — | — | — | — |
-| Favourite | 69 | -0.0417 | -0.0404 | 0.6957 | -0.1086 | -0.0006 | [-0.1358, +0.0589] |
-| Longshot | 67 | -0.0481 | -0.0454 | 0.3433 | -0.1592 | +0.0831 | [-0.1813, +0.5543] |
+| Favourite | 48 | -0.1125 | -0.0727 | 0.6667 | -0.1323 | -0.0811 | [-0.2286, +0.0365] |
+| Longshot | 49 | -0.0157 | -0.0109 | 0.3061 | -0.1380 | -0.0556 | [-0.3806, +0.4793] |
 | Logistic (unanchored) | 49 | +0.3179 | +0.2433 | 0.6122 | -0.1162 | +0.4262 | [-0.0732, +0.8117] |
 | Market-anchored linear | 44 | +0.3282 | +0.2174 | 0.5909 | -0.0668 | +0.3548 | [+0.1132, +0.5521] |
 | Market-anchored boosted | 55 | +0.0432 | +0.0339 | 0.5455 | -0.1188 | +0.0399 | [-0.2400, +0.3451] |
@@ -54,8 +54,8 @@ An edge gate accepts trades only in a narrow band of predicted edge, which leave
 | Strategy | Slope | Std error | t | R² | Mean predicted edge | Mean realized edge |
 |---|---:|---:|---:|---:|---:|---:|
 | Market price | — | — | — | — | — | — |
-| Favourite | -12.980 | 70.956 | -0.18 | 0.0005 | +0.0477 | -0.0048 |
-| Longshot | — | — | — | — | +0.0477 | +0.0261 |
+| Favourite | -16.771 | 60.986 | -0.27 | 0.0016 | +0.0476 | -0.0474 |
+| Longshot | — | — | — | — | +0.0477 | -0.0160 |
 | Logistic (unanchored) | +0.535 | 2.244 | +0.24 | 0.0012 | +0.0685 | +0.1713 |
 | Market-anchored linear | -12.581 | 8.841 | -1.42 | 0.0460 | +0.0482 | +0.1376 |
 | Market-anchored boosted | -1.273 | 6.529 | -0.19 | 0.0007 | +0.0531 | +0.0577 |
@@ -119,15 +119,15 @@ Break-even uninformed fill rate: **28.7%**. Below this share of benign flow the 
 
 | Uninformed fill rate | Fills | P&L | Quoted spread | Adverse selection | Capture ratio | Peak capital |
 |---:|---:|---:|---:|---:|---:|---:|
-| 0% | 1013 | -1,845 | 2,026 | -3,871 | -0.911 | 4,900 |
-| 10% | 1190 | -1,189 | 2,380 | -3,569 | -0.499 | 5,100 |
-| 20% | 1367 | -231 | 2,734 | -2,965 | -0.085 | 5,600 |
-| 30% | 1551 | +34 | 3,102 | -3,068 | +0.011 | 6,000 |
-| 40% | 1722 | +451 | 3,444 | -2,993 | +0.131 | 7,000 |
-| 50% | 1912 | +1,911 | 3,824 | -1,913 | +0.500 | 6,800 |
-| 60% | 2093 | +3,482 | 4,186 | -704 | +0.832 | 5,600 |
-| 80% | 2464 | +4,564 | 4,928 | -364 | +0.926 | 5,700 |
-| 100% | 2848 | +5,690 | 5,696 | -6 | +0.999 | 0 |
+| 0% | 1013 | -1,845 | 2,025 | -3,870 | -0.911 | 4,900 |
+| 10% | 1190 | -1,189 | 2,376 | -3,565 | -0.500 | 5,100 |
+| 20% | 1367 | -231 | 2,728 | -2,959 | -0.085 | 5,600 |
+| 30% | 1551 | +34 | 3,094 | -3,060 | +0.011 | 6,000 |
+| 40% | 1722 | +451 | 3,436 | -2,985 | +0.131 | 7,000 |
+| 50% | 1912 | +1,911 | 3,815 | -1,903 | +0.501 | 6,800 |
+| 60% | 2093 | +3,482 | 4,179 | -697 | +0.833 | 5,600 |
+| 80% | 2464 | +4,564 | 4,922 | -359 | +0.927 | 5,700 |
+| 100% | 2848 | +5,690 | 5,690 | +0 | +1.000 | 0 |
 
 ### Quoting around: Market-anchored linear
 
@@ -135,15 +135,15 @@ Break-even uninformed fill rate: **28.7%**. Below this share of benign flow the 
 
 | Uninformed fill rate | Fills | P&L | Quoted spread | Adverse selection | Capture ratio | Peak capital |
 |---:|---:|---:|---:|---:|---:|---:|
-| 0% | 958 | +72 | 1,916 | -1,844 | +0.038 | 7,400 |
-| 10% | 1136 | +386 | 2,272 | -1,886 | +0.170 | 7,700 |
-| 20% | 1323 | +781 | 2,646 | -1,865 | +0.295 | 6,800 |
-| 30% | 1508 | +1,128 | 3,016 | -1,888 | +0.374 | 6,400 |
-| 40% | 1691 | +1,180 | 3,382 | -2,202 | +0.349 | 7,000 |
-| 50% | 1896 | +2,396 | 3,792 | -1,396 | +0.632 | 7,400 |
-| 60% | 2080 | +3,564 | 4,160 | -596 | +0.857 | 6,000 |
-| 80% | 2451 | +4,409 | 4,902 | -493 | +0.899 | 5,700 |
-| 100% | 2848 | +5,692 | 5,696 | -4 | +0.999 | 0 |
+| 0% | 958 | +72 | 1,915 | -1,843 | +0.038 | 7,400 |
+| 10% | 1136 | +386 | 2,270 | -1,884 | +0.170 | 7,700 |
+| 20% | 1323 | +781 | 2,642 | -1,860 | +0.296 | 6,800 |
+| 30% | 1508 | +1,128 | 3,010 | -1,882 | +0.375 | 6,400 |
+| 40% | 1691 | +1,180 | 3,375 | -2,196 | +0.350 | 7,000 |
+| 50% | 1896 | +2,396 | 3,785 | -1,388 | +0.633 | 7,400 |
+| 60% | 2080 | +3,564 | 4,155 | -591 | +0.858 | 6,000 |
+| 80% | 2451 | +4,409 | 4,898 | -490 | +0.900 | 5,700 |
+| 100% | 2848 | +5,692 | 5,692 | +0 | +1.000 | 0 |
 
 Capture ratio is realized P&L over the spread that was quoted. One means every quoted cent was kept; zero or below means the flow took back more than the spread paid. Adverse selection is roughly constant across the sweep because it depends on how often the price moves, not on how much benign flow arrives alongside it.
 
@@ -162,7 +162,7 @@ The scanner was run against a synthetic snapshot containing 11 planted basket mi
 ## Limitations
 
 - Entries assume the quoted size is available; prediction-market books are thin and a real order moves them.
-- Resolution risk is not modelled: markets can settle on a technicality, be disputed, or resolve differently from the plain reading of the question.
+- Resolution risk is charged at an assumed rate, not a measured one; the rate itself is the assumption, and the sweep above is the honest form of it.
 - Capital lock-up until settlement is modelled, but the opportunity cost of that capital is not.
 - Settled markets are a survivorship-inflected sample; markets that were voided or never resolved do not appear in the panel.
 - Multiple models were examined, which creates researcher degrees of freedom. The regularization strength is chosen inside each training window rather than from these results, but the choice of model family was not. Treat a single positive result as a hypothesis, not a finding.

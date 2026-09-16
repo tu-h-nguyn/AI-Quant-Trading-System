@@ -9,15 +9,24 @@ prediction-market panel breaks that assumption twice over:
 * a label is not knowable until the market settles, so training on a market
   that resolves next month is training on information the trader did not have.
 
-Both are fixed by the same rule, which is also the live constraint: at each
-decision point, train only on markets that had **already settled** by then.
-That makes group leakage impossible by construction -- a settled market's
-observations all precede its settlement, so it cannot appear in a later test
-block -- without needing a separate grouping pass.
+The live constraint fixes the second: at each decision point, train only on
+markets that had **already settled** by then.
 
-The price of the rule is a long cold start: nothing can be predicted until
-enough markets have resolved. That cost is real and is reported rather than
-engineered away.
+That rule alone does *not* fix the first, which an earlier version of this
+module wrongly assumed it did. The reasoning was that a settled market's
+observations all precede its settlement, so it could never reappear in a later
+test block. Real data breaks it: a venue's stated end date routinely precedes
+its last recorded trade, so a row can be observed *after* the market it belongs
+to has resolved. Such a row is eligible for training by resolution time while
+sitting inside the very block being scored. Three conditions are therefore
+enforced together, and each is load-bearing:
+
+1. the row's market resolved before the decision point (no unknowable labels);
+2. the row is positionally earlier than the block (no scoring what was fitted);
+3. no market appears on both sides of the split (no shared label across it).
+
+The price is a long cold start: nothing can be predicted until enough markets
+have resolved. That cost is real and is reported rather than engineered away.
 """
 
 from __future__ import annotations
@@ -32,26 +41,33 @@ from sklearn.base import clone
 def resolution_aware_folds(
     timestamps: pd.Series,
     resolution_times: pd.Series,
+    groups: pd.Series,
     test_window: int = 500,
     min_train_size: int = 1000,
     embargo_days: float = 0.0,
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
     """Yield ``(train_positions, test_positions)`` for each chronological block.
 
-    ``timestamps`` and ``resolution_times`` must be aligned with the design
-    matrix and ordered by observation time. Blocks whose training set is too
-    small are skipped, so the caller sees no prediction rather than one made
-    from an inadequate history.
+    ``timestamps``, ``resolution_times`` and ``groups`` must all be aligned with
+    the design matrix and ordered by observation time. ``groups`` identifies the
+    market each row belongs to and is required rather than optional: it is what
+    makes the no-shared-label guarantee hold instead of merely being likely.
+
+    Blocks whose training set is too small are skipped, so the caller sees no
+    prediction rather than one made from an inadequate history.
     """
     if test_window <= 0 or min_train_size <= 0:
         raise ValueError("test_window and min_train_size must be positive")
     if embargo_days < 0:
         raise ValueError("embargo_days must be non-negative")
+    if not (len(timestamps) == len(resolution_times) == len(groups)):
+        raise ValueError("timestamps, resolution_times and groups must be the same length")
 
     observed = pd.to_datetime(timestamps, utc=True)
     resolved = pd.to_datetime(resolution_times, utc=True)
     if not observed.is_monotonic_increasing:
         raise ValueError("timestamps must be sorted in ascending order")
+    group_values = np.asarray(groups)
 
     embargo = pd.Timedelta(days=float(embargo_days))
     n = len(observed)
@@ -60,10 +76,22 @@ def resolution_aware_folds(
         cutoff = observed.iloc[start] - embargo
         # Compared through pandas rather than numpy so that tz-aware and
         # tz-naive panels both work without silently shifting by the offset.
-        train = np.flatnonzero((resolved <= cutoff).to_numpy())
-        if len(train) < min_train_size:
+        eligible = np.flatnonzero((resolved <= cutoff).to_numpy())
+        # Strictly earlier rows only. A market whose stated end date precedes
+        # its last recorded trade is eligible by resolution time while still
+        # having rows inside the block being scored.
+        eligible = eligible[eligible < start]
+        # And no market may span the split: its one label would sit on both
+        # sides, and the model would be graded on outcomes it memorized.
+        held_out = set(group_values[start:stop].tolist())
+        if held_out:
+            keep = np.array(
+                [value not in held_out for value in group_values[eligible]], dtype=bool
+            )
+            eligible = eligible[keep] if len(eligible) else eligible
+        if len(eligible) < min_train_size:
             continue
-        yield train, np.arange(start, stop)
+        yield eligible, np.arange(start, stop)
 
 
 def resolution_aware_walk_forward(
@@ -72,6 +100,7 @@ def resolution_aware_walk_forward(
     y: pd.Series,
     timestamps: pd.Series,
     resolution_times: pd.Series,
+    groups: pd.Series,
     test_window: int = 500,
     min_train_size: int = 1000,
     embargo_days: float = 0.0,
@@ -98,7 +127,7 @@ def resolution_aware_walk_forward(
     predictions: list[pd.Series] = []
     y_values = np.asarray(y)
     for train, test in resolution_aware_folds(
-        timestamps, resolution_times, test_window, min_train_size, embargo_days
+        timestamps, resolution_times, groups, test_window, min_train_size, embargo_days
     ):
         if len(np.unique(y_values[train])) < 2:
             continue
@@ -119,6 +148,7 @@ def resolution_aware_walk_forward(
 def fold_diagnostics(
     timestamps: pd.Series,
     resolution_times: pd.Series,
+    groups: pd.Series,
     test_window: int = 500,
     min_train_size: int = 1000,
     embargo_days: float = 0.0,
@@ -127,7 +157,7 @@ def fold_diagnostics(
     rows = []
     observed = pd.to_datetime(timestamps, utc=True)
     for train, test in resolution_aware_folds(
-        timestamps, resolution_times, test_window, min_train_size, embargo_days
+        timestamps, resolution_times, groups, test_window, min_train_size, embargo_days
     ):
         rows.append(
             {

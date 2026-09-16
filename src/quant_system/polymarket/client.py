@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from .markets import Market, parse_markets
+from .markets import Market, parse_market, parse_markets
 from .orderbook import OrderBook
 
 GAMMA_URL = "https://gamma-api.polymarket.com"
@@ -167,6 +167,21 @@ class PolymarketClient:
     def fetch_markets(self, max_markets: int = 500, **filters: Any) -> list[Market]:
         """Normalized markets, ready for scanning or feature construction."""
         return parse_markets(self.iter_markets(max_markets=max_markets, **filters))
+
+    def get_market(self, market_id: str) -> Market | None:
+        """Fetch one market by id, whatever its state.
+
+        The listing endpoints are filtered by ``active``/``closed``, so a market
+        held in a position cannot be checked for settlement through them: an
+        open-market listing will never contain the market that just resolved.
+        This reads it directly.
+        """
+        payload = self.transport.get_json(f"{self.gamma_url}/markets/{market_id}")
+        if isinstance(payload, list):
+            payload = payload[0] if payload else None
+        if not isinstance(payload, Mapping):
+            return None
+        return parse_market(payload)
 
     def order_book(self, token_id: str) -> OrderBook:
         """Live book for one outcome token."""

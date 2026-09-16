@@ -113,10 +113,25 @@ def test_sortino_only_penalizes_downside_and_exceeds_sharpe_when_skewed():
     assert sortino(returns) > sharpe(returns)
 
 
-def test_sortino_is_undefined_without_dispersed_downside():
-    assert np.isnan(sortino(pd.Series([0.01, 0.02, 0.03])))  # no losses at all
-    assert np.isnan(sortino(pd.Series([0.01, 0.02, -0.03])))  # one loss, no spread
-    assert np.isnan(sortino(pd.Series([0.05, -0.01, 0.05, -0.01])))  # identical losses
+def test_sortino_counts_how_often_losses_happen_not_just_how_big():
+    # Same loss magnitude, ten times as many losing days: downside deviation
+    # taken over only the losing periods would score these identically.
+    rare = pd.Series(([0.01] * 49 + [-0.02]) * 5)
+    frequent = pd.Series(([0.01] * 4 + [-0.02]) * 50)
+    assert sortino(rare) > sortino(frequent)
+
+
+def test_sortino_is_defined_for_a_single_catastrophic_period():
+    # A year of flat days and one -20% day has obvious downside; the sample
+    # standard deviation of one observation does not.
+    year = pd.Series([0.0] * 251 + [-0.20])
+    assert np.isfinite(sortino(year))
+    assert sortino(year) < 0
+
+
+def test_sortino_is_undefined_without_any_downside():
+    assert np.isnan(sortino(pd.Series([0.01, 0.02, 0.03])))
+    assert np.isnan(sortino(pd.Series(dtype=float)))
 
 
 def test_a_flat_return_series_has_no_sharpe_rather_than_an_enormous_one():
@@ -126,7 +141,9 @@ def test_a_flat_return_series_has_no_sharpe_rather_than_an_enormous_one():
     assert flat.std(ddof=1) != 0.0
     assert np.isnan(sharpe(flat))
     assert np.isnan(sharpe(pd.Series([0.0] * 10)))
-    assert np.isnan(sortino(pd.Series([-0.01] * 10)))
+    # Constant losses have zero dispersion around zero only if they are zero;
+    # a constant -1% a day is genuine downside and keeps a finite ratio.
+    assert np.isnan(sortino(pd.Series([0.0] * 10)))
 
 
 def test_max_drawdown_is_the_worst_peak_to_trough():

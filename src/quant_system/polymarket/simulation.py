@@ -37,6 +37,13 @@ class PanelSpec:
     spread: float = 0.02
     min_depth: float = 200.0
     max_depth: float = 5_000.0
+    # Fraction of markets whose stated end date falls before their last recorded
+    # observation. Real venues do this -- a market keeps trading past its stated
+    # close while resolution is pending -- and it is the shape that breaks a
+    # split relying on resolution time alone. Whether Polymarket does it at what
+    # rate is not verifiable from this package, so it defaults to off; turn it on
+    # to stress the validation guard against a panel that exhibits it.
+    late_observation_fraction: float = 0.0
     seed: int = 42
 
     def __post_init__(self) -> None:
@@ -46,6 +53,8 @@ class PanelSpec:
             raise ValueError("signal_strength must lie in [0, 1]")
         if not 0.0 <= self.mispricing_decay <= 1.0:
             raise ValueError("mispricing_decay must lie in [0, 1]")
+        if not 0.0 <= self.late_observation_fraction <= 1.0:
+            raise ValueError("late_observation_fraction must lie in [0, 1]")
 
 
 def simulate_panel(spec: PanelSpec | None = None) -> pd.DataFrame:
@@ -72,6 +81,18 @@ def simulate_panel(spec: PanelSpec | None = None) -> pd.DataFrame:
         market_start = start + pd.Timedelta(days=int(offsets[market]))
         end_date = market_start + pd.Timedelta(days=settings.horizon_days)
         step = max(settings.horizon_days // settings.observations_per_market, 1)
+        # Drawn only when the feature is on: an unconditional draw would advance
+        # the seeded stream and change every other market in the panel, so
+        # switching a disabled option into the code would silently rewrite the
+        # world it was supposed to leave alone.
+        if settings.late_observation_fraction > 0 and (
+            rng.uniform() < settings.late_observation_fraction
+        ):
+            # Stated close lands a third of the way in, so the later rows are
+            # observed after the market has nominally resolved.
+            end_date = market_start + pd.Timedelta(
+                days=max(step * settings.observations_per_market // 3, 1)
+            )
 
         for observation in range(settings.observations_per_market):
             timestamp = market_start + pd.Timedelta(days=observation * step)

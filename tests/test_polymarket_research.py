@@ -262,7 +262,11 @@ def test_no_market_appears_on_both_sides_of_any_fold():
     ids = frame.loc[X.index, "market_id"].to_numpy()
     folds = list(
         resolution_aware_folds(
-            frame.loc[X.index, "timestamp"], frame.loc[X.index, "end_date"], 100, 100
+            frame.loc[X.index, "timestamp"],
+            frame.loc[X.index, "end_date"],
+            frame.loc[X.index, "market_id"],
+            100,
+            100,
         )
     )
     assert folds, "expected at least one usable fold"
@@ -274,17 +278,61 @@ def test_training_never_uses_a_label_before_it_was_knowable():
     frame, X, y = _walk_forward_panel()
     timestamps = frame.loc[X.index, "timestamp"]
     resolutions = frame.loc[X.index, "end_date"]
-    for train, test in resolution_aware_folds(timestamps, resolutions, 100, 100):
+    groups = frame.loc[X.index, "market_id"]
+    for train, test in resolution_aware_folds(timestamps, resolutions, groups, 100, 100):
         decision_time = timestamps.iloc[test[0]]
         assert resolutions.iloc[train].max() <= decision_time
+
+
+def test_a_row_observed_after_its_market_resolved_cannot_leak_into_training():
+    # A venue's stated end date routinely precedes its last recorded trade, so a
+    # row can be eligible by resolution time while sitting inside the block being
+    # scored. Resolution time alone does not exclude it; position and group must.
+    timestamps = pd.Series(pd.date_range("2024-01-01", periods=30, freq="D", tz="UTC"))
+    resolutions = pd.Series([pd.Timestamp("2024-01-01", tz="UTC")] * 30)
+    resolutions.iloc[20:] = pd.Timestamp("2024-03-01", tz="UTC")
+    groups = pd.Series([f"m{index // 3}" for index in range(30)])
+
+    folds = list(resolution_aware_folds(timestamps, resolutions, groups, 10, 1))
+    assert folds
+    for train, test in folds:
+        assert not set(train) & set(test)
+        assert not set(groups.iloc[train]) & set(groups.iloc[test])
+        assert train.max() < test.min()
+
+
+def test_the_guard_holds_on_a_panel_that_trades_past_its_stated_close(): 
+    # The synthetic panel used by the study has every observation before its
+    # market's end date, which is why it never exposed the leak. Generate the
+    # realistic shape explicitly and check the guard against it.
+    panel = simulate_panel(
+        PanelSpec(n_markets=200, observations_per_market=10,
+                  late_observation_fraction=0.4, seed=9)
+    )
+    assert (panel["timestamp"] > panel["end_date"]).mean() > 0.1
+    frame = build_snapshot_features(panel, momentum_windows=(1,), volatility_window=0)
+    X, y, _ = design_matrix(frame)
+    ids = frame.loc[X.index, "market_id"]
+    folds = list(
+        resolution_aware_folds(
+            frame.loc[X.index, "timestamp"], frame.loc[X.index, "end_date"], ids, 200, 100
+        )
+    )
+    assert folds
+    for train, test in folds:
+        assert not set(ids.iloc[train]) & set(ids.iloc[test])
 
 
 def test_embargo_shrinks_the_training_set():
     frame, X, y = _walk_forward_panel()
     timestamps, resolutions = frame.loc[X.index, "timestamp"], frame.loc[X.index, "end_date"]
-    without = [len(t) for t, _ in resolution_aware_folds(timestamps, resolutions, 100, 50)]
+    groups = frame.loc[X.index, "market_id"]
+    without = [len(t) for t, _ in resolution_aware_folds(timestamps, resolutions, groups, 100, 50)]
     with_embargo = [
-        len(t) for t, _ in resolution_aware_folds(timestamps, resolutions, 100, 50, embargo_days=30)
+        len(t)
+        for t, _ in resolution_aware_folds(
+            timestamps, resolutions, groups, 100, 50, embargo_days=30
+        )
     ]
     assert sum(with_embargo) < sum(without)
 
@@ -297,6 +345,7 @@ def test_walk_forward_returns_chronologically_ordered_out_of_sample_forecasts():
         y,
         frame.loc[X.index, "timestamp"],
         frame.loc[X.index, "end_date"],
+        frame.loc[X.index, "market_id"],
         test_window=100,
         min_train_size=100,
     )
@@ -311,4 +360,12 @@ def test_unsorted_timestamps_are_rejected_rather_than_silently_mis_split():
     reversed_timestamps = frame.loc[X.index, "timestamp"].iloc[::-1].reset_index(drop=True)
     reversed_timestamps.index = X.index
     with pytest.raises(ValueError):
-        list(resolution_aware_folds(reversed_timestamps, frame.loc[X.index, "end_date"], 100, 50))
+        list(
+            resolution_aware_folds(
+                reversed_timestamps,
+                frame.loc[X.index, "end_date"],
+                frame.loc[X.index, "market_id"],
+                100,
+                50,
+            )
+        )

@@ -212,9 +212,9 @@ def build_order_plan(
             plan.skipped.append({"market_id": market.market_id, "reason": reason})
             continue
 
-        best = _best_side(market, books, float(probability), rules, bankroll, fee_bps)
+        best, why = _best_side(market, books, float(probability), rules, bankroll, fee_bps)
         if best is None:
-            plan.skipped.append({"market_id": market.market_id, "reason": "no side cleared min_edge"})
+            plan.skipped.append({"market_id": market.market_id, "reason": why})
             continue
         candidates.append(best)
 
@@ -463,13 +463,9 @@ def _rejection_reason(
     if yes_book.best_ask is None or no_book.best_ask is None:
         return "one-sided book"
 
-    spread = yes_book.spread
-    if spread is not None and spread > rules.max_spread:
-        return f"spread {spread:.3f} above max_spread"
-    depth = yes_book.notional_depth("sell") + no_book.notional_depth("sell")
-    if depth < rules.min_book_depth_usd:
-        return f"ask depth {depth:.0f} below min_book_depth_usd"
-
+    # Spread and depth are checked per side in _best_side, against the book the
+    # order will actually hit. Testing them here on the YES book alone would let
+    # a NO order through into a book the gate exists to reject.
     days = market.days_to_resolution(now)
     if days is not None:
         if days < rules.min_days_to_resolution:
@@ -486,10 +482,17 @@ def _best_side(
     rules: RiskLimits,
     bankroll: float,
     fee_bps: float,
-) -> OrderIntent | None:
-    """Price both sides through the book and keep the better one, if any."""
+) -> tuple[OrderIntent | None, str]:
+    """Price both sides through their own books and keep the better one.
+
+    Liquidity is judged per side rather than market-wide. A market can be tight
+    and deep on YES while its NO book is a fifty-cent-wide stub, and the order
+    only ever hits one of them. Returns the chosen order, or ``None`` with the
+    reason the last side failed, so the plan's audit trail says what happened.
+    """
     yes, no = market.yes_outcome, market.no_outcome
     best: OrderIntent | None = None
+    reason = "no side cleared min_edge"
     sides = (
         ("yes", yes, probability),
         ("no", no, 1.0 - probability),
@@ -499,6 +502,15 @@ def _best_side(
             continue
         book = books.get(outcome.token_id)
         if book is None or book.best_ask is None:
+            continue
+
+        spread = book.spread
+        if spread is not None and spread > rules.max_spread:
+            reason = f"{side} spread {spread:.3f} above max_spread"
+            continue
+        depth = book.ask_notional()
+        if depth < rules.min_book_depth_usd:
+            reason = f"{side} ask depth {depth:.0f} below min_book_depth_usd"
             continue
 
         reference = book.mid if book.mid is not None else book.best_ask
@@ -563,7 +575,7 @@ def _best_side(
         )
         if best is None or intent.expected_profit > best.expected_profit:
             best = intent
-    return best
+    return best, reason
 
 
 def _rescale(order: OrderIntent, notional: float, fraction: float) -> OrderIntent:

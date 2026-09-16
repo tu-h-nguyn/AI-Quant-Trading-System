@@ -191,9 +191,70 @@ def acquire_snapshot(config: dict) -> Acquisition:
     if not panel_path.exists():
         raise FileNotFoundError(f"No training panel at {panel_path}")
     resolved = pd.read_csv(panel_path, parse_dates=["timestamp", "end_date"])
-    live_history = resolved.iloc[0:0].copy()
+
+    # The open markets' price history is snapshotted alongside them. Without it
+    # there is nothing to score: a model fitted on momentum columns cannot read
+    # them off a single point in time.
+    try:
+        history = pd.DataFrame(store.load("history"))
+    except FileNotFoundError:
+        history = pd.DataFrame()
+    if history.empty:
+        raise FileNotFoundError(
+            "The snapshot carries no price history for its open markets, so they "
+            "cannot be scored. Re-run scripts/fetch_polymarket_data.py without "
+            "--skip-history."
+        )
+    history["timestamp"] = pd.to_datetime(history["timestamp"], utc=True)
+    history["end_date"] = pd.to_datetime(history["end_date"], utc=True)
+
     captured = store.captured_at("markets") or datetime.now(timezone.utc)
-    return Acquisition(markets, books, resolved, live_history, captured)
+    return Acquisition(markets, books, resolved, history, captured)
+
+
+def settle_matured_positions(
+    broker: PaperBroker,
+    acquired: Acquisition,
+    client: PolymarketClient | None = None,
+) -> tuple[float, list[str]]:
+    """Close every held position whose market has resolved since it was opened.
+
+    Resolution cannot be read off the open-market listing, which is filtered to
+    exactly the markets that have *not* resolved: a held market that settled
+    yesterday is absent from it. An earlier version checked there and so never
+    settled anything, which is worse than it sounds — positions accumulate, the
+    committed-capital figure only grows, and once it reaches the exposure cap the
+    trader stops placing orders permanently while appearing to run fine.
+
+    Outcomes come from the settled panel where it has them, and from a direct
+    per-market lookup otherwise.
+    """
+    labels: dict[str, int] = {}
+    panel = acquired.resolved
+    if not panel.empty and {"market_id", "label"}.issubset(panel.columns):
+        labels = {
+            str(market_id): int(label)
+            for market_id, label in panel.groupby("market_id")["label"].last().items()
+        }
+
+    realized = 0.0
+    settled: list[str] = []
+    for market_id in list(broker.open_market_ids()):
+        label = labels.get(market_id)
+        if label is None and client is not None:
+            try:
+                market = client.get_market(market_id)
+            except Exception as error:  # noqa: BLE001 - one lookup must not stop the run
+                print(f"  could not check {market_id}: {error}")
+                continue
+            if market is None or not market.is_resolved:
+                continue
+            label = market.yes_label
+        if label is None:
+            continue
+        realized += broker.settle(market_id, int(label))
+        settled.append(market_id)
+    return realized, settled
 
 
 def forecast_live_markets(
@@ -291,17 +352,11 @@ def main() -> None:
     )
     print(f"  evaluating as of {now.isoformat()}")
 
-    # Settle anything the account holds whose market has since resolved. A
-    # position left open past resolution overstates both committed capital and
-    # the account's risk.
-    settleable = {m.market_id: m.yes_label for m in markets if m.is_resolved}
-    realized = 0.0
-    for market_id in broker.open_market_ids():
-        label = settleable.get(market_id)
-        if label is not None:
-            realized += broker.settle(market_id, int(label))
-    if realized:
-        print(f"  settled matured positions for {realized:+,.2f}")
+    realized, settled_ids = settle_matured_positions(
+        broker, acquired, PolymarketClient() if args.source == "live" else None
+    )
+    if settled_ids:
+        print(f"  settled {len(settled_ids)} matured positions for {realized:+,.2f}")
 
     print("Scanning for structural arbitrage ...")
     arbitrage_cfg = config["arbitrage"]

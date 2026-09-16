@@ -151,6 +151,7 @@ def main() -> None:
             "restrict training to markets that had already resolved"
         )
     resolution_times = frame.loc[X.index, "end_date"]
+    market_ids = frame.loc[X.index, "market_id"]
     price = frame.loc[X.index, "price"].astype(float)
 
     # One market quoted a hundred times is one outcome, not a hundred. Weighting
@@ -162,7 +163,9 @@ def main() -> None:
     test_window = int(research_cfg["walk_forward_test_window"])
     min_train = int(research_cfg["walk_forward_min_train_size"])
     embargo_days = float(research_cfg.get("embargo_days", 0.0))
-    folds = fold_diagnostics(timestamps, resolution_times, test_window, min_train, embargo_days)
+    folds = fold_diagnostics(
+        timestamps, resolution_times, market_ids, test_window, min_train, embargo_days
+    )
     if folds.empty:
         raise ValueError(
             f"No fold had {min_train} observations from already-settled markets. "
@@ -190,7 +193,7 @@ def main() -> None:
     )
 
     tilt = baseline_tilt(trade_config)
-    forecasts: dict[str, pd.Series] = dict(baseline_probabilities(price, tilt))
+    forecasts: dict[str, pd.Series] = {}
 
     anchor_alpha = model_cfg.get("anchor_alpha", "auto")
     linear = market_anchored_model(alpha=anchor_alpha)
@@ -216,17 +219,44 @@ def main() -> None:
             y,
             timestamps,
             resolution_times,
+            market_ids,
             test_window=test_window,
             min_train_size=min_train,
             embargo_days=embargo_days,
             sample_weight=sample_weight if name != "Logistic (unanchored)" else None,
         )
 
+    # Every entrant must be scored on the same rows. The walk-forward models
+    # produce nothing before the cold start, so baselines evaluated over the
+    # full panel would be compared on an extra calendar window the models never
+    # saw -- and trade count, ROI and total profit are all window-dependent.
+    scored = pd.Index([])
+    for probability in forecasts.values():
+        scored = scored.union(probability.index)
+    if len(scored) == 0:
+        raise ValueError("no fold produced an out-of-sample forecast")
+    print(f"Common out-of-sample sample: {len(scored)} of {len(X)} observations")
+
+    for name, series in baseline_probabilities(price.loc[scored], tilt).items():
+        forecasts[name] = series
+    forecasts = {
+        name: series.loc[series.index.intersection(scored)]
+        for name, series in forecasts.items()
+    }
+
     ceiling = float("nan")
     if "true_probability" in frame.columns:
         ceiling = achievable_brier_skill(
-            y, frame.loc[X.index, "true_probability"].astype(float), price
+            y.loc[scored],
+            frame.loc[scored, "true_probability"].astype(float),
+            price.loc[scored],
         )
+
+    order = [
+        "Market price", "Favourite", "Longshot",
+        "Logistic (unanchored)", "Market-anchored linear", "Market-anchored boosted",
+    ]
+    forecasts = {name: forecasts[name] for name in order if name in forecasts}
 
     rows: list[dict] = []
     for name, probability in forecasts.items():
@@ -819,8 +849,8 @@ def _write_report(
         "",
         "- Entries assume the quoted size is available; prediction-market books are thin and "
         "a real order moves them.",
-        "- Resolution risk is not modelled: markets can settle on a technicality, be disputed, "
-        "or resolve differently from the plain reading of the question.",
+        "- Resolution risk is charged at an assumed rate, not a measured one; the rate "
+        "itself is the assumption, and the sweep above is the honest form of it.",
         "- Capital lock-up until settlement is modelled, but the opportunity cost of that "
         "capital is not.",
         "- Settled markets are a survivorship-inflected sample; markets that were voided or "

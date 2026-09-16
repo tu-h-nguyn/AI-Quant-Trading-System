@@ -130,22 +130,33 @@ class OrderBook:
             return None
         return self.best_ask - self.best_bid
 
-    def depth(self, side: str, levels: int | None = None) -> float:
-        """Total resting shares on ``side``, optionally over the top levels."""
-        book = self._side(side)
-        selected = book if levels is None else book[:levels]
-        return float(sum(level.size for level in selected))
+    def bid_depth(self, levels: int | None = None) -> float:
+        """Resting shares on the bid, optionally over the top levels."""
+        return _sum_size(self.bids, levels)
 
-    def notional_depth(self, side: str, levels: int | None = None) -> float:
-        """Total resting dollars on ``side``, optionally over the top levels."""
-        book = self._side(side)
-        selected = book if levels is None else book[:levels]
-        return float(sum(level.size * level.price for level in selected))
+    def ask_depth(self, levels: int | None = None) -> float:
+        """Resting shares on the ask, optionally over the top levels."""
+        return _sum_size(self.asks, levels)
+
+    def bid_notional(self, levels: int | None = None) -> float:
+        """Resting dollars on the bid, optionally over the top levels."""
+        return _sum_notional(self.bids, levels)
+
+    def ask_notional(self, levels: int | None = None) -> float:
+        """Resting dollars on the ask, optionally over the top levels.
+
+        The accessors name the book rather than an action on purpose. ``buy``
+        means "lift the asks" to :meth:`walk` but would naturally read as "the
+        bid side" to an inspector, and a caller who wrote ``depth(BUY)`` to ask
+        how much it could buy would silently size against the wrong half of the
+        book -- no error, just a wrong number.
+        """
+        return _sum_notional(self.asks, levels)
 
     def imbalance(self, levels: int = 3) -> float:
         """Signed book imbalance in ``[-1, 1]``; positive means bid-heavy."""
-        bid = self.depth(BUY, levels)
-        ask = self.depth(SELL, levels)
+        bid = self.bid_depth(levels)
+        ask = self.ask_depth(levels)
         total = bid + ask
         return 0.0 if total <= 0 else (bid - ask) / total
 
@@ -207,8 +218,15 @@ class OrderBook:
             return float(sum(lv.size for lv in book if lv.price <= limit_price + 1e-12))
         return float(sum(lv.size for lv in book if lv.price >= limit_price - 1e-12))
 
-    def _side(self, side: str) -> tuple[Level, ...]:
-        return self.bids if _normalize_side(side) == BUY else self.asks
+
+def _sum_size(levels: tuple[Level, ...], count: int | None) -> float:
+    selected = levels if count is None else levels[:count]
+    return float(sum(level.size for level in selected))
+
+
+def _sum_notional(levels: tuple[Level, ...], count: int | None) -> float:
+    selected = levels if count is None else levels[:count]
+    return float(sum(level.size * level.price for level in selected))
 
 
 def _normalize_side(side: str) -> str:

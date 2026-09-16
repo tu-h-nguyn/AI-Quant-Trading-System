@@ -180,9 +180,11 @@ leakage impossible by construction and never uses a label before it was knowable
 
 **Read skill against the achievable ceiling.** Brier score on binary outcomes is
 dominated by the irreducible variance `q(1 - q)`, so an oracle holding the true
-probabilities scores only about `+0.012` against a roughly efficient price. A
-model at `+0.004` has captured a third of everything available, not "almost
-nothing". The study reports the ceiling alongside every skill score.
+probabilities scores only about `+0.010` against a roughly efficient price. A
+model at `+0.004` has captured nearly half of everything available, not "almost
+nothing". The study reports the ceiling alongside every skill score, and scores
+every entrant on one common out-of-sample window so the comparison is between
+strategies rather than between calendar periods.
 
 ### 3. Market making — being paid the spread instead of paying it
 

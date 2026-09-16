@@ -252,7 +252,10 @@ def simulate_market_making(
                 cash += size * price - fee
                 book.cash_flow += size * price - fee
                 book.inventory -= size
-            book.quoted_spread_value += size * settings.half_spread
+            # The quote's own half-spread, not the configured one: inside the
+            # widening window they differ by widen_multiple, and both headline
+            # maker diagnostics are ratios against this figure.
+            book.quoted_spread_value += size * (quote.spread / 2.0)
             book.n_informed += int(informed)
             book.n_uninformed += int(not informed)
             fills.append(
@@ -396,22 +399,28 @@ def _affordable_size(
 ) -> float:
     """Shrink a fill to what the cash balance can actually collateralize.
 
-    A long share costs its price. A short share costs a dollar, because that is
-    what has to be paid if the outcome resolves YES; treating a short as free
-    would let the simulation write cheques settlement cannot honour.
+    A fill is split at the point where it crosses flat, because the two halves
+    cost different things. Closing an existing position releases collateral and
+    is free to the cash balance; opening a new one costs the price for a long
+    and a dollar less the price for a short, since a dollar is what settlement
+    can demand of it.
+
+    Charging the whole fill at the rate implied by the *pre-trade* sign is what
+    an earlier version did, and it financed positions out of nothing: selling
+    400 against an inventory of +50 was treated as entirely closing, so a
+    350-share naked short appeared with one dollar of cash behind it.
     """
-    if requested <= 0 or cash <= 0:
+    if requested <= 0:
         return 0.0
-    if side == "buy":
-        per_share = price
-        if inventory < 0:
-            # Buying back a short releases its collateral rather than costing.
-            per_share = max(price - 1.0, 0.0)
-    else:
-        per_share = 0.0 if inventory > 0 else 1.0 - price
-    if per_share <= 0:
+    # Closing capacity is available even at zero cash: unwinding a position
+    # releases collateral rather than consuming it.
+    closing_capacity = max(-inventory, 0.0) if side == "buy" else max(inventory, 0.0)
+    opening_rate = price if side == "buy" else 1.0 - price
+    if opening_rate <= 0:
         return requested
-    return float(min(requested, max(cash, 0.0) / per_share))
+    # Closing is free, so the budget only has to cover whatever opens beyond it.
+    affordable = closing_capacity + max(cash, 0.0) / opening_rate
+    return float(min(requested, affordable))
 
 
 def _empty_fills() -> pd.DataFrame:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from ..backtest.metrics import ZERO_DISPERSION
+
 
 def rolling_sharpe(returns: pd.Series, window: int = 252) -> pd.Series:
     if window < 2:
@@ -78,10 +80,10 @@ def subperiod_summary(returns: pd.Series, periods_per_year: int = 252) -> pd.Dat
                 "observations": int(len(r)),
                 "return": float((1 + r).prod() - 1),
                 "annualized_volatility": float(vol),
-                # Same threshold as backtest.metrics.sharpe: a subperiod with no
-                # real variation must report nan, not a ratio against float noise.
+                # The shared threshold, imported rather than copied: two values
+                # drifting apart is exactly what it was introduced to prevent.
                 "sharpe": float(r.mean() / r.std(ddof=1) * np.sqrt(periods_per_year))
-                if r.std(ddof=1) > 1e-15
+                if r.std(ddof=1) > ZERO_DISPERSION
                 else float("nan"),
             }
         )

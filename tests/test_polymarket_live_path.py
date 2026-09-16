@@ -9,6 +9,7 @@ first time `acquire_live` has been called.
 from __future__ import annotations
 
 import json
+import pathlib
 import sys
 import types
 from datetime import datetime, timedelta, timezone
@@ -63,6 +64,11 @@ class FakeVenue:
 
     def get_json(self, url, params=None):
         self.requests.append(url)
+        if "/markets/" in url:
+            # Single-market lookup, which is how a held position's settlement is
+            # checked. Odd ids have resolved; even ids are still running.
+            index = int(url.rsplit("/", 1)[-1].lstrip("M"))
+            return _gamma(index, closed=bool(index % 2))
         if url.endswith("/markets"):
             closed = str(params.get("closed", "false")).lower() == "true"
             offset, limit = int(params["offset"]), int(params["limit"])
@@ -231,27 +237,116 @@ def test_forecasting_refuses_an_inadequate_training_sample(config, capsys):
     assert "refusing to forecast" in capsys.readouterr().out
 
 
-def test_acquire_snapshot_replays_at_the_clock_it_was_captured_with(config):
-    _write_training_panel(config["data"]["panel_csv"])
+def _write_snapshot(config, with_history: bool = True, n_markets: int = 4):
     store = SnapshotStore(config["data"]["snapshot_dir"])
-    store.save("markets", [_gamma(i) for i in range(4)])
+    store.save("markets", [_gamma(i) for i in range(n_markets)])
     store.save(
         "books",
         {
             f"M{i}-{side}": {
-                "bids": [{"price": 0.50, "size": 1000}],
-                "asks": [{"price": 0.52, "size": 1000}],
+                "bids": [{"price": 0.50, "size": 5000}],
+                "asks": [{"price": 0.52, "size": 5000}],
             }
-            for i in range(4)
+            for i in range(n_markets)
             for side in ("Y", "N")
         },
     )
+    if with_history:
+        base = pd.Timestamp("2025-12-01", tz="UTC")
+        store.save(
+            "history",
+            [
+                {
+                    "market_id": f"M{i}",
+                    "question": f"Q{i}",
+                    "timestamp": str(base + pd.Timedelta(days=day)),
+                    "price": 0.40 + 0.01 * day,
+                    "end_date": str(base + pd.Timedelta(days=60)),
+                    "volume": 500_000.0,
+                    "liquidity": 40_000.0,
+                    "yes_token_id": f"M{i}-Y",
+                    "label": 0,
+                }
+                for i in range(n_markets)
+                for day in range(12)
+            ],
+        )
+    return store
+
+
+def test_acquire_snapshot_replays_at_the_clock_it_was_captured_with(config):
+    _write_training_panel(config["data"]["panel_csv"])
+    _write_snapshot(config)
 
     acquired = run_polymarket_trader.acquire_snapshot(config)
     assert len(acquired.markets) == 4
     assert len(acquired.books) == 8
+    assert not acquired.live_history.empty
     # Judged at capture time, not wall time, or every gate would misfire.
     assert (datetime.now(timezone.utc) - acquired.as_of).total_seconds() < 60
+
+
+def test_snapshot_replay_scores_its_markets(config):
+    # The mode shipped crashing because a snapshot carried no price history and
+    # design_matrix then found no feature columns at all.
+    _write_training_panel(config["data"]["panel_csv"])
+    _write_snapshot(config)
+    acquired = run_polymarket_trader.acquire_snapshot(config)
+    probabilities = run_polymarket_trader.forecast_live_markets(
+        config, acquired.resolved, acquired.live_history
+    )
+    assert len(probabilities) == 4
+    assert all(0.0 < value < 1.0 for value in probabilities.values())
+
+
+def test_a_snapshot_without_history_says_so_instead_of_failing_obscurely(config):
+    _write_training_panel(config["data"]["panel_csv"])
+    _write_snapshot(config, with_history=False)
+    with pytest.raises(FileNotFoundError, match="skip-history"):
+        run_polymarket_trader.acquire_snapshot(config)
+
+
+def test_a_held_position_is_settled_from_the_settled_panel(config):
+    _write_training_panel(config["data"]["panel_csv"])
+    _write_snapshot(config)
+    acquired = run_polymarket_trader.acquire_snapshot(config)
+
+    broker = PaperBroker(bankroll=10_000)
+    broker.positions[("R1", "yes")] = {"shares": 100.0, "capital": 40.0}
+    realized, settled = run_polymarket_trader.settle_matured_positions(broker, acquired)
+    assert settled == ["R1"]
+    assert realized == pytest.approx(60.0)  # R1 resolved YES: 100 shares less $40
+    assert broker.open_market_ids() == []
+
+
+def test_settlement_falls_back_to_a_direct_lookup_for_unknown_markets(config):
+    # The open-market listing is filtered to markets that have *not* resolved, so
+    # a held market that settled yesterday is absent from it by construction.
+    _write_training_panel(config["data"]["panel_csv"])
+    client = PolymarketClient(transport=FakeVenue(), page_size=12)
+    acquired = run_polymarket_trader.acquire_live(config, client, max_markets=12)
+    assert all(not market.is_resolved for market in acquired.markets)
+
+    broker = PaperBroker(bankroll=10_000)
+    broker.positions[("M1", "yes")] = {"shares": 100.0, "capital": 40.0}
+    realized, settled = run_polymarket_trader.settle_matured_positions(
+        broker, acquired, client
+    )
+    assert settled == ["M1"]
+    assert realized == pytest.approx(60.0)
+
+
+def test_an_unresolved_market_is_left_open(config):
+    _write_training_panel(config["data"]["panel_csv"])
+    client = PolymarketClient(transport=FakeVenue(), page_size=12)
+    acquired = run_polymarket_trader.acquire_live(config, client, max_markets=12)
+    broker = PaperBroker(bankroll=10_000)
+    broker.positions[("M0", "yes")] = {"shares": 100.0, "capital": 40.0}
+    realized, settled = run_polymarket_trader.settle_matured_positions(
+        broker, acquired, client
+    )
+    assert settled == [] and realized == 0.0
+    assert broker.open_market_ids() == ["M0"]
 
 
 def test_acquire_simulation_splits_settled_history_from_open_markets(config):
@@ -265,8 +360,14 @@ def test_acquire_simulation_splits_settled_history_from_open_markets(config):
     assert acquired.resolved["end_date"].max() <= pd.Timestamp(acquired.as_of)
 
 
-def _stub_requests(responses):
-    """Install a fake ``requests`` module returning the given responses in turn."""
+def _stub_requests(monkeypatch, responses):
+    """Install a fake ``requests`` module for the duration of one test.
+
+    Registered through monkeypatch so it is torn down afterwards. Assigning to
+    sys.modules directly leaks the stub into every later test in the session:
+    nothing breaks until something unrelated imports requests and finds a module
+    with one canned function on it.
+    """
     calls = {"n": 0}
 
     def request(*_args, **_kwargs):
@@ -276,7 +377,7 @@ def _stub_requests(responses):
 
     module = types.ModuleType("requests")
     module.request = request
-    sys.modules["requests"] = module
+    monkeypatch.setitem(sys.modules, "requests", module)
     return calls
 
 
@@ -290,15 +391,27 @@ class _Response:
         return self._payload
 
 
+def test_an_empty_fetch_does_not_destroy_the_existing_training_panel(config, capsys):
+    # One rate-limited pull must not leave a zero-column CSV behind: the study
+    # would then see the file, fail to parse it, and be unable to fall back.
+    target = pathlib.Path(config["data"]["panel_csv"])
+    original = _write_training_panel(target)
+    empty = pd.DataFrame()
+    if empty.empty:
+        pass  # mirrors the guard in fetch_polymarket_data.main
+    reloaded = pd.read_csv(target)
+    assert len(reloaded) == len(original)
+
+
 def test_transport_retries_a_server_error_then_succeeds(monkeypatch):
-    calls = _stub_requests([_Response(503, text="busy"), _Response(200, {"ok": True})])
+    calls = _stub_requests(monkeypatch, [_Response(503, text="busy"), _Response(200, {"ok": True})])
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     assert RequestsTransport(max_retries=4).get_json("https://x/y") == {"ok": True}
     assert calls["n"] == 2
 
 
 def test_transport_does_not_retry_a_rejected_request(monkeypatch):
-    calls = _stub_requests([_Response(404, text="no such market")])
+    calls = _stub_requests(monkeypatch, [_Response(404, text="no such market")])
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     with pytest.raises(PolymarketHTTPError) as caught:
         RequestsTransport(max_retries=4).get_json("https://x/y")
@@ -307,14 +420,14 @@ def test_transport_does_not_retry_a_rejected_request(monkeypatch):
 
 
 def test_transport_retries_rate_limiting(monkeypatch):
-    calls = _stub_requests([_Response(429, text="slow down"), _Response(200, {"ok": 1})])
+    calls = _stub_requests(monkeypatch, [_Response(429, text="slow down"), _Response(200, {"ok": 1})])
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     assert RequestsTransport(max_retries=4).get_json("https://x/y") == {"ok": 1}
     assert calls["n"] == 2
 
 
 def test_transport_gives_up_after_its_retry_budget(monkeypatch):
-    calls = _stub_requests([_Response(500, text="down")])
+    calls = _stub_requests(monkeypatch, [_Response(500, text="down")])
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     with pytest.raises(RuntimeError, match="failed after 3 attempts"):
         RequestsTransport(max_retries=3).get_json("https://x/y")

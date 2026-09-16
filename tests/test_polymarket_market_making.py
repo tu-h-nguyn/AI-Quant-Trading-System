@@ -109,6 +109,34 @@ def test_concurrency_cap_bounds_the_capital_committed():
     assert narrow.summary["n_markets"] < wide.summary["n_markets"]
 
 
+def test_a_fill_crossing_flat_is_collateralized_on_the_part_that_opens():
+    from quant_system.polymarket.market_making import _affordable_size
+
+    # Selling 400 against +50 closes 50 and opens a 350-share naked short, which
+    # needs settlement collateral. Charging the whole fill at the pre-trade
+    # sign's rate financed it out of nothing.
+    assert _affordable_size("sell", 400, 0.50, 50.0, 1.0) < 60
+    assert _affordable_size("buy", 400, 0.50, -50.0, 1.0) < 60
+    # Closing alone releases collateral, so it is free even at zero cash.
+    assert _affordable_size("sell", 50, 0.50, 50.0, 0.0) == pytest.approx(50.0)
+    assert _affordable_size("buy", 50, 0.50, -50.0, 0.0) == pytest.approx(50.0)
+    # With nothing to close and no cash, nothing is affordable.
+    assert _affordable_size("sell", 400, 0.50, 0.0, 0.0) == 0.0
+    assert _affordable_size("sell", 400, 0.50, 50.0, 1e9) == pytest.approx(400.0)
+
+
+def test_widened_quotes_are_measured_at_the_width_actually_quoted():
+    # Both maker headline diagnostics are ratios against quoted spread, so
+    # recording the configured half-spread inside the widening window inflated
+    # the capture ratio by the widening multiple.
+    config = QuoteConfig(
+        half_spread=0.02, widen_within_days=1e9, widen_multiple=3.0, seed=3
+    )
+    result = simulate_market_making(_panel(), config, bankroll=100_000)
+    per_share = result.summary["quoted_spread_value"] / result.fills["size"].sum()
+    assert per_share > 0.05  # 0.06 before clipping at the price bounds, not 0.02
+
+
 def test_an_undercapitalized_book_declines_fills_rather_than_borrowing():
     result = simulate_market_making(
         _panel(), QuoteConfig(uninformed_fill_rate=0.5, seed=3), bankroll=50.0

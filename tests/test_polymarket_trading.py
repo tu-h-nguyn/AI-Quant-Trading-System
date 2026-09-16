@@ -386,6 +386,36 @@ def test_resolution_and_liquidity_gates_reject_before_sizing():
     assert any("min_book_depth_usd" in entry["reason"] for entry in illiquid.skipped)
 
 
+def test_liquidity_gates_apply_to_the_book_the_order_will_hit():
+    # A market can be tight and deep on YES while its NO book is a fifty-cent
+    # stub. Testing the YES book alone let a NO order into exactly the book the
+    # max_spread gate exists to reject.
+    from dataclasses import replace as _replace
+
+    from quant_system.polymarket.orderbook import OrderBook as _Book
+
+    markets, fixture = _live_markets()
+    market = markets[0]
+    books = dict(fixture.books)
+    books[market.yes_outcome.token_id] = _Book.from_levels(
+        market.yes_outcome.token_id, [(0.50, 10_000)], [(0.52, 10_000)]
+    )
+    books[market.no_outcome.token_id] = _Book.from_levels(
+        market.no_outcome.token_id, [(0.10, 10_000)], [(0.60, 10_000)]
+    )
+    # A forecast that makes the wide NO side look like the better bet.
+    plan = build_order_plan(
+        [_replace(market, end_date=NOW + timedelta(days=30))],
+        books,
+        {market.market_id: 0.02},
+        10_000,
+        RiskLimits(max_spread=0.10, min_edge=0.03),
+        as_of=NOW,
+    )
+    assert plan.orders == []
+    assert any("no spread" in entry["reason"] for entry in plan.skipped)
+
+
 def test_one_order_per_event_prevents_the_same_bet_under_several_names():
     markets, fixture = _live_markets()
     forecasts = {m.market_id: 0.97 for m in markets}

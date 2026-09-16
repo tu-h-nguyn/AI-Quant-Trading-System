@@ -478,38 +478,47 @@ def _cap_by_capital(
     fixed_cost_per_unit: float,
     max_capital: float,
 ) -> float:
-    """Shrink the basket until its cash outlay fits the capital budget.
+    """Shrink the basket until its capital requirement fits the budget.
 
-    Cost is monotone in size, so a bisection converges; the result is rounded
+    Capital is monotone in size, so a bisection converges; the result is rounded
     down to stay inside the budget rather than straddling it.
     """
     if shares <= 0 or max_capital <= 0:
         return 0.0
-    if _basket_cost(legs, shares, fee_bps, fixed_cost_per_unit) <= max_capital:
+    if _basket_capital(legs, shares, fee_bps, fixed_cost_per_unit) <= max_capital:
         return shares
     low, high = 0.0, shares
     for _ in range(60):
         mid = (low + high) / 2.0
-        if _basket_cost(legs, mid, fee_bps, fixed_cost_per_unit) <= max_capital:
+        if _basket_capital(legs, mid, fee_bps, fixed_cost_per_unit) <= max_capital:
             low = mid
         else:
             high = mid
     return low
 
 
-def _basket_cost(
+def _basket_capital(
     legs: Sequence[tuple[OrderBook, str]],
     shares: float,
     fee_bps: float,
     fixed_cost_per_unit: float,
 ) -> float:
-    """Net cash out for ``shares`` baskets, including fees and any mint."""
+    """Peak cash the basket ties up, the same figure reported as capital_required.
+
+    Netting the proceeds of the selling legs against it would make the budget
+    unenforceable on exactly the baskets that sell: a mint-and-sell basket has
+    negative *net* cash flow, so any budget test against that quantity passes at
+    full book depth. Measured that way, a $1,000 limit returned a $100,000
+    basket. The number that must fit the budget is what has to be funded before
+    the proceeds arrive.
+    """
     total = fixed_cost_per_unit * shares
     for book, side in legs:
         fill = book.walk(side, shares, fee_bps)
         if not fill.complete:
             return float("inf")
-        total += fill.cost
+        if side == BUY:
+            total += fill.cost
     return total
 
 

@@ -76,6 +76,21 @@ def test_fees_can_erase_an_apparent_basket_edge():
     assert scan_binary_complement(market, books, fee_bps=300, max_capital=1e6, min_profit=0.0) is None
 
 
+def test_the_capital_budget_binds_on_baskets_that_sell():
+    # Net cash flow is negative for a mint-and-sell basket, so a budget tested
+    # against that quantity passes at full book depth: a $1,000 limit returned a
+    # $100,000 basket. The budget applies to what must be funded up front.
+    market = _market()
+    books = {
+        "y": OrderBook.from_levels("y", [(0.60, 100_000)], [(0.62, 10)]),
+        "n": OrderBook.from_levels("n", [(0.45, 100_000)], [(0.47, 10)]),
+    }
+    found = scan_binary_mint_and_sell(market, books, max_capital=1_000, min_profit=0.0)
+    assert found.capital_required <= 1_000 + 1e-6
+    assert found.shares == pytest.approx(1_000)
+    assert found.profit == pytest.approx(50.0)
+
+
 def test_no_basket_is_reported_when_the_pair_costs_more_than_a_dollar():
     market = _market()
     books = {

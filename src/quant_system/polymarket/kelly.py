@@ -162,7 +162,7 @@ def allocate_exposure(
     """
     if max_total_exposure <= 0:
         raise ValueError("max_total_exposure must be positive")
-    items = dict(fractions) if isinstance(fractions, Mapping) else dict(fractions)
+    items = dict(fractions)
     if any(value < 0 for value in items.values()):
         raise ValueError("fractions must be non-negative")
     total = sum(items.values())

@@ -36,13 +36,19 @@ def build_resolved_panel(
     markets: list[Market],
     interval: str = "max",
     points_per_market: int = 12,
+    require_label: bool = True,
 ) -> pd.DataFrame:
-    """Sample price history for settled markets and label it with the outcome."""
+    """Sample price history and, for settled markets, label it with the outcome.
+
+    ``require_label=False`` reuses the same sampling for *open* markets, whose
+    history a snapshot replay needs; the label column is then a placeholder that
+    is scored against, never trained on.
+    """
     rows: list[dict] = []
     for market in markets:
         label = market.yes_label
         yes = market.yes_outcome
-        if label is None or yes is None:
+        if yes is None or (require_label and label is None):
             continue
         try:
             history = client.price_history(yes.token_id, interval=interval)
@@ -64,7 +70,7 @@ def build_resolved_panel(
                     "volume": market.volume,
                     "liquidity": market.liquidity,
                     "yes_token_id": yes.token_id,
-                    "label": int(label),
+                    "label": int(label) if label is not None else 0,
                 }
             )
     return pd.DataFrame(rows)
@@ -76,6 +82,11 @@ def main() -> None:
     parser.add_argument("--max-markets", type=int, default=None)
     parser.add_argument("--skip-books", action="store_true", help="snapshot markets only")
     parser.add_argument("--skip-resolved", action="store_true", help="skip the training panel")
+    parser.add_argument(
+        "--skip-history",
+        action="store_true",
+        help="skip price history for open markets, which a snapshot replay needs",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -107,6 +118,26 @@ def main() -> None:
         )
         print(f"  {len(books)} books saved")
 
+    if not args.skip_history:
+        # A snapshot without price history cannot be replayed: the model is
+        # fitted on momentum columns that a single point in time cannot supply.
+        from quant_system.polymarket.markets import parse_markets as _parse
+
+        open_markets = [m for m in _parse(active_raw) if m.is_binary]
+        print(f"Fetching price history for {len(open_markets)} open markets ...")
+        history = build_resolved_panel(
+            client,
+            open_markets,
+            interval=str(data_cfg["history_interval"]),
+            points_per_market=int(data_cfg["history_points_per_market"]),
+            require_label=False,
+        )
+        store.save("history", history.assign(
+            timestamp=history["timestamp"].astype(str),
+            end_date=history["end_date"].astype(str),
+        ).to_dict(orient="records") if not history.empty else [])
+        print(f"  {len(history)} history rows saved")
+
     if not args.skip_resolved:
         print(f"Fetching up to {max_markets} resolved markets ...")
         resolved = client.fetch_markets(max_markets=max_markets, active=False, closed=True)
@@ -119,9 +150,18 @@ def main() -> None:
             points_per_market=int(data_cfg["history_points_per_market"]),
         )
         target = ROOT / data_cfg["panel_csv"]
-        target.parent.mkdir(parents=True, exist_ok=True)
-        panel.to_csv(target, index=False)
-        print(f"  wrote {len(panel)} rows across {panel['market_id'].nunique()} markets -> {target}")
+        if panel.empty:
+            # Overwriting a good panel with an empty file turns one bad fetch
+            # into a broken study: load_panel would see the file, read zero
+            # columns, and raise instead of falling back to simulation.
+            print(f"  no settled history retrieved; leaving {target} untouched")
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            panel.to_csv(target, index=False)
+            print(
+                f"  wrote {len(panel)} rows across "
+                f"{panel['market_id'].nunique()} markets -> {target}"
+            )
 
 
 if __name__ == "__main__":
