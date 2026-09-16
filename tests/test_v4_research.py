@@ -28,13 +28,21 @@ def test_capped_weights_reject_infeasible_cap():
 
 
 def test_rolling_application_uses_lagged_weights_and_costs():
-    idx = pd.date_range("2020-01-01", periods=3, freq="D")
-    returns = pd.DataFrame({"A": [0.0, 0.10, 0.0], "B": [0.0, 0.0, 0.10]}, index=idx)
-    weights = pd.DataFrame({"A": [1.0, 1.0, 0.0], "B": [0.0, 0.0, 1.0]}, index=idx)
+    idx = pd.date_range("2020-01-01", periods=4, freq="D")
+    returns = pd.DataFrame(
+        {"A": [0.0, 0.10, 0.0, 0.0], "B": [0.0, 0.0, 0.10, 0.0]}, index=idx
+    )
+    weights = pd.DataFrame(
+        {"A": [1.0, 1.0, 0.0, 0.0], "B": [0.0, 0.0, 1.0, 1.0]}, index=idx
+    )
     net, turnover, held = apply_weights(returns, weights, transaction_cost_bps=100)
     assert held.loc[idx[1], "A"] == 1.0
     assert net.loc[idx[1]] < 0.10
-    assert turnover.loc[idx[2]] > 0
+    # Weights are lagged, so the rotation scheduled on day 3 is only held, and
+    # therefore only charged for, on day 4.
+    assert turnover.loc[idx[2]] == 0.0
+    assert turnover.loc[idx[3]] > 0
+    assert held.loc[idx[3], "B"] == 1.0
 
 
 def test_block_bootstrap_is_reproducible():

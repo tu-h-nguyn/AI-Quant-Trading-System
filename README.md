@@ -77,11 +77,14 @@ python scripts/download_data.py
 python scripts/run_flagship_study.py
 python scripts/run_v5_report.py
 python scripts/run_research.py
+python scripts/run_polymarket_study.py
+python scripts/scan_polymarket_arbitrage.py --source simulation
 pytest
 ruff check src scripts
 ```
 
-The default universe is configured in `configs/default.yaml`. The configuration also controls the label horizon, walk-forward geometry, embargo, transaction costs, portfolio constraints, and bootstrap settings.
+The equities universe is configured in `configs/default.yaml` and the
+prediction-market track in `configs/polymarket.yaml`. The configuration also controls the label horizon, walk-forward geometry, embargo, transaction costs, portfolio constraints, and bootstrap settings.
 
 ## Flagship outputs
 
@@ -110,6 +113,121 @@ The aggregate strategy series is the equal-weight average of the per-asset OOS r
 
 Backtests remain historical simulations. Market-data revisions, execution slippage, liquidity constraints, borrow costs, corporate actions, regime shifts, and model risk can materially change live outcomes.
 
+## Polymarket prediction-market layer
+
+The second research track targets **Polymarket**, where a contract's price *is* a
+probability and settles at exactly 0 or 1. That changes what "edge" means, so the
+layer is built around two separate profit sources rather than one.
+
+### 1. Structural arbitrage — edge that does not depend on a forecast
+
+A binary market's two outcomes must settle to one dollar between them, and a
+venue-guaranteed exhaustive outcome set must settle to one dollar across all its
+members. When a basket can be assembled for less than its guaranteed settlement
+value, the profit is an accounting identity:
+
+| Scanner | Identity exploited |
+|---|---|
+| `binary_complement` | YES + NO asks clear $1 → buy both, settle at $1 |
+| `binary_mint_and_sell` | YES + NO bids clear $1 → split collateral, sell both |
+| `group_dutch_book` | YES basket over `n` exclusive outcomes costs under $1 |
+| `neg_risk_no_basket` | NO basket over `n` exclusive outcomes costs under `n - 1` |
+
+Every basket is sized by **walking each leg's book jointly**, charged the
+configured taker fee, and capped by a capital budget, so the reported size is
+what the snapshot could actually absorb rather than top-of-book. Only
+Polymarket `negRisk` groups are treated as verified partitions; any other
+grouping is refused by default, because an incomplete outcome list makes the
+"guaranteed" payout false.
+
+```bash
+python scripts/scan_polymarket_arbitrage.py --source simulation   # self-test
+python scripts/fetch_polymarket_data.py                            # snapshot the venue
+python scripts/scan_polymarket_arbitrage.py --source snapshot      # scan it
+```
+
+The self-test runs against synthetic books containing a known set of planted
+mispricings, so it checks the scanner for false negatives *and* false positives.
+
+### 2. Forecast edge — beating the market's own probability
+
+The second source requires a probability forecast better than the price. Three
+design decisions carry most of the weight here, and each came out of a measured
+failure rather than a preference:
+
+**Anchor the model to the price.** Treating the market price as an ordinary
+feature asks the model to re-estimate the coefficient on the single strongest
+predictor available, from the few hundred *independent* settled markets a real
+panel supplies. A coefficient of 0.8 where the truth is 1.0 shrinks every
+forecast toward a coin flip and scores worse than simply quoting the price —
+which is exactly what the unanchored entrant does in the study.
+`MarketAnchoredClassifier` instead fits
+
+```text
+logit(q) = logit(market price) + g(other features)
+```
+
+so `g = 0` reproduces the market exactly and regularization makes deferring to
+the price the default. The worst case degrades to the market's forecast rather
+than to something worse.
+
+**Split by settlement, not by row.** Every snapshot of one market shares a
+single label, so a row-wise walk-forward puts the same outcome on both sides of
+the boundary. On the study panel that leaked 160 markets across one split.
+`resolution_aware_walk_forward` trains only on markets that had **already
+settled** when each test block began — the live constraint — which makes group
+leakage impossible by construction and never uses a label before it was knowable.
+
+**Read skill against the achievable ceiling.** Brier score on binary outcomes is
+dominated by the irreducible variance `q(1 - q)`, so an oracle holding the true
+probabilities scores only about `+0.012` against a roughly efficient price. A
+model at `+0.004` has captured a third of everything available, not "almost
+nothing". The study reports the ceiling alongside every skill score.
+
+### Sizing, frictions, and execution
+
+- Kelly sizing for a one-dollar payoff, `f* = (q - c) / (1 - c)` on the **all-in**
+  cost, under fractional-Kelly, per-market, and aggregate exposure caps.
+- Forecasts shrunk toward the market price before sizing, because a stale quote
+  that looks mispriced is usually adverse selection rather than edge.
+- Orders sized against a **limit price that already embeds the required edge**,
+  so a fill can never happen at a price that destroys the reason for the trade.
+- One order per event, since markets under one event are a single bet wearing
+  several names.
+- Event-driven backtesting: capital is locked until settlement and cannot be
+  spent twice, entries pay the ask, and positions pay exactly $1 per winning
+  share.
+
+```bash
+python scripts/run_polymarket_study.py      # flagship study → reports/polymarket_research_report.md
+```
+
+### What this layer does *not* do
+
+It never signs, funds, or submits an order. `build_order_plan` produces an
+audited, risk-gated plan and `PaperBroker` executes it against a cash ledger;
+live submission needs custody of a funded wallet and cannot be exercised by this
+repository's tests, so it is left as a deliberate, separate integration behind
+the `ExecutionAdapter` protocol.
+
+### Honest status of the evidence
+
+Polymarket's API is not reachable from every environment. When no cached panel
+is present the study runs on **synthetic markets where an edge exists by
+construction**, and says so at the top of its report. That run validates that
+sizing, frictions, settlement, leakage control, and capital accounting are wired
+together correctly — it is not evidence of edge on the real venue. Run
+`scripts/fetch_polymarket_data.py` to replace the panel with real settled
+markets; until then, the arbitrage scanners are the only component whose edge is
+provable rather than estimated.
+
+One finding from the synthetic runs is worth stating because it sets a
+precondition for the whole track: **below roughly 2,500 settled markets the
+study cannot detect the edge it plants.** A panel of 800 markets returns a
+negative skill score even though the edge is there, because a few hundred
+independent binary outcomes cannot pin down a correction worth a few thousandths
+of a Brier point. Panel size is a precondition for this research, not a knob.
+
 ## Repository structure
 
 ```text
@@ -120,6 +238,9 @@ scripts/
   run_flagship_study.py        main multi-asset research experiment
   run_v5_report.py             deeper diagnostics for first asset
   run_research.py              rolling portfolio research
+  fetch_polymarket_data.py     Polymarket snapshots + resolved training panel
+  scan_polymarket_arbitrage.py structural mispricing scanner
+  run_polymarket_study.py      Polymarket OOS research experiment
 src/quant_system/
   data/                        acquisition/loading/panel construction
   features/                    feature engineering
@@ -128,6 +249,20 @@ src/quant_system/
   risk/                        volatility and drawdown controls
   backtest/                    simulation, costs, metrics
   evaluation/                  OOS, diagnostics, robustness, reports
+  polymarket/                  prediction-market research and trading layer
+    pricing.py                 binary-contract arithmetic, fees, break-even
+    orderbook.py               depth-aware execution against a CLOB book
+    markets.py                 normalized market/outcome records
+    client.py                  read-only Gamma + CLOB client, snapshots
+    arbitrage.py               structural, model-free mispricing scanners
+    kelly.py                   bankroll sizing under edge uncertainty
+    features.py                leakage-safe snapshot feature engineering
+    model.py                   market-anchored and calibrated estimators
+    validation.py              resolution-aware out-of-sample splitting
+    backtest.py                event-driven simulation with 0/1 settlement
+    metrics.py                 skill-vs-price and bankroll diagnostics
+    execution.py               risk-gated order planning and paper broker
+    simulation.py              deterministic synthetic markets
   config.py                    shared experiment configuration loader
 tests/                         research invariants and regressions
 reports/experiments/           generated experiment metadata
@@ -139,7 +274,12 @@ reports/figures/               generated research figures
 
 ### V6 — Research-to-Engineering
 
-- Hyperparameter selection nested inside time-series validation.
+- ~~Hyperparameter selection nested inside time-series validation~~ (done for the
+  market-anchored model: the penalty is chosen by chronological hold-out inside
+  each training window).
+- Live Polymarket panel: replace the synthetic study data with cached settled
+  markets, then re-run the skill test against the real venue.
+- Cross-venue comparison of the same question against other prediction markets.
 - Cross-sectional factor pipeline and portfolio-level ML ranking.
 - More realistic execution model: spread, commissions, slippage, and market impact.
 - Statistical tests for forecast and return significance.

@@ -6,5 +6,6 @@ PyYAML>=6.0,<7
 yfinance>=0.2.50,<1
 matplotlib>=3.9,<4
 xgboost>=2.1,<4
+requests>=2.31,<3
 pytest>=8,<9
 ruff>=0.6,<1

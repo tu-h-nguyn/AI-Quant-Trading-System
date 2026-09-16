@@ -50,6 +50,16 @@ jobs:
           GIT_COMMIT: ${{ github.sha }}
         run: python scripts/run_research.py
 
+      # Runs without network access: with no cached panel the study falls back
+      # to synthetic markets, which is what makes it reproducible in CI.
+      - name: Run Polymarket OOS study
+        env:
+          GIT_COMMIT: ${{ github.sha }}
+        run: python scripts/run_polymarket_study.py
+
+      - name: Self-test the arbitrage scanner against planted mispricings
+        run: python scripts/scan_polymarket_arbitrage.py --source simulation
+
       - name: Run tests and lint
         run: |
           pytest
@@ -62,6 +72,8 @@ jobs:
           git add reports/flagship_research_report.md reports/flagship_results.csv reports/flagship_aggregate_results.csv
           git add reports/experiments/*.json
           git add reports/v5_research_report.md
+          git add reports/polymarket_research_report.md reports/polymarket_results.csv
+          git add reports/polymarket_arbitrage.csv
           git add -f reports/figures/*.png
           if git diff --cached --quiet; then
             echo "No research artifact changes to publish."
@@ -80,4 +92,7 @@ jobs:
             reports/flagship_aggregate_results.csv
             reports/experiments/*.json
             reports/v5_research_report.md
+            reports/polymarket_research_report.md
+            reports/polymarket_results.csv
+            reports/polymarket_arbitrage.csv
             reports/figures/*.png

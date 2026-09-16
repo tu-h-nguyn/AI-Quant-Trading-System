@@ -17,6 +17,7 @@ dependencies = [
   "yfinance>=0.2.50,<1",
   "matplotlib>=3.9,<4",
   "xgboost>=2.1,<4",
+  "requests>=2.31,<3",
 ]
 
 [project.optional-dependencies]

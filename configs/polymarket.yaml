@@ -1,0 +1,97 @@
+# Polymarket prediction-market research configuration.
+#
+# Frictions are set deliberately pessimistically. A prediction-market edge is
+# small and the difference between a mid fill and a taker fill is frequently
+# larger than the entire edge, so understating either the spread or the fee
+# turns a losing strategy into a winning backtest.
+
+data:
+  # Where fetched snapshots and the resolved training panel are stored.
+  snapshot_dir: "data/polymarket"
+  panel_csv: "data/polymarket/resolved_panel.csv"
+  max_markets: 500
+  min_volume: 25000
+  history_interval: "max"
+  history_points_per_market: 12
+
+frictions:
+  # Taker fee in basis points of min(price, 1 - price) per share. Set this from
+  # the venue's current schedule; zero is correct only for fee-free markets.
+  fee_bps: 0.0
+  # Quoted spread assumed when a snapshot carries no book, in probability units.
+  default_spread: 0.02
+  # Extra adverse selection charged on top of the spread.
+  extra_slippage: 0.005
+
+risk:
+  bankroll: 10000.0
+  kelly_multiplier: 0.25
+  max_fraction_per_market: 0.02
+  max_total_exposure: 0.20
+  min_edge: 0.04
+  # Fraction of the forecast pulled back toward the market price before sizing.
+  shrinkage: 0.35
+  min_notional: 10.0
+  max_spread: 0.10
+  min_book_depth_usd: 250.0
+  min_days_to_resolution: 0.25
+  max_days_to_resolution: 365.0
+  max_orders: 25
+  one_order_per_event: true
+  max_drawdown: 0.25
+  drawdown_floor: 0.25
+  one_trade_per_market: true
+
+arbitrage:
+  max_capital_per_basket: 1000.0
+  min_profit: 1.0
+  min_shares: 5.0
+  include_mint_and_sell: true
+  # Only trust outcome sets the venue marks negRisk; anything else is not a
+  # verified partition and its "guaranteed" payout is not guaranteed.
+  require_verified_groups: true
+
+model:
+  method: "isotonic"
+  calibration_fraction: 0.30
+  random_state: 42
+  momentum_windows: [1, 5]
+  volatility_window: 5
+  # Columns copied into the design matrix unchanged. These are taken on trust:
+  # a column that encodes information unavailable at its timestamp will produce
+  # a spectacular and entirely false backtest. "signal" is the synthetic
+  # panel's planted observable and is ignored when absent.
+  passthrough_features: ["signal"]
+  # L2 penalty on the market-anchored correction. "auto" selects it by
+  # chronological hold-out inside each training window, which keeps the
+  # strength of the correction out of the researcher's hands.
+  anchor_alpha: "auto"
+  anchor_alpha_grid: [0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0]
+  boosted_alpha_grid: [0.3, 3.0, 30.0]
+
+research:
+  walk_forward_test_window: 500
+  walk_forward_min_train_size: 1000
+  # Days of embargo between a market's settlement and its use as training data,
+  # covering the lag between resolution and the outcome being reliably known.
+  embargo_days: 0.0
+  bootstrap_samples: 2000
+  bootstrap_block: 10
+
+simulation:
+  # 2500 markets is deliberate. Below roughly this many *settled* markets the
+  # study cannot detect the edge it plants: a panel of 800 markets returns a
+  # negative skill score even though the edge is there by construction, because
+  # a few hundred independent binary outcomes cannot pin down a correction
+  # worth a few thousandths of a Brier point. Panel size is a precondition for
+  # this research, not a tuning knob.
+  n_markets: 2500
+  observations_per_market: 16
+  horizon_days: 60
+  mispricing_sigma: 0.35
+  # How much of each market's mispricing is legible from an observable feature.
+  # This is an assumption about the synthetic world, not a measurement.
+  signal_strength: 0.75
+  mispricing_decay: 0.5
+  spread: 0.02
+  seed: 42

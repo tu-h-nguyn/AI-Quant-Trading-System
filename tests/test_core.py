@@ -29,7 +29,10 @@ def test_backtest_shifts_signal():
     df = pd.DataFrame({"close": [100.0, 110.0, 121.0]}, index=idx)
     signal = pd.Series([1.0, 1.0, 1.0], index=idx)
     result = backtest(df, signal, transaction_cost_bps=0)
-    assert result.returns.iloc[1] == 0.0
+    # The signal is lagged, so the first bar is flat however bullish the signal
+    # is; from the second bar the position set on the first bar earns the move.
+    assert result.returns.iloc[0] == 0.0
+    assert result.returns.iloc[1] > 0.0
     assert result.returns.iloc[2] > 0.0
 
 

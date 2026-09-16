@@ -11,3 +11,6 @@ data/processed/*
 !data/processed/.gitkeep
 reports/figures/*
 !reports/figures/.gitkeep
+
+# Polymarket snapshots and the resolved training panel
+data/polymarket/
