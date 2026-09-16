@@ -24,3 +24,13 @@ risk:
   max_leverage: 1.50
   volatility_window: 20
   max_drawdown: 0.20
+research:
+  portfolio_lookback: 252
+  rebalance_every: 21
+  benchmark: "SPY"
+  walk_forward_test_window: 63
+  walk_forward_min_train_size: 504
+  walk_forward_gap: 5
+  time_series_splits: 5
+  bootstrap_samples: 2000
+  bootstrap_block: 20

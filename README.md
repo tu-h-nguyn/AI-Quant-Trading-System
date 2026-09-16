@@ -1,30 +1,34 @@
 # AI Quant Trading System
 
-End-to-end quantitative research platform for systematic trading experiments with machine-learning signals, portfolio construction, risk controls, transaction-cost-aware backtesting, and walk-forward evaluation.
+End-to-end quantitative research platform for systematic trading experiments with machine-learning signals, portfolio construction, risk controls, transaction-cost-aware backtesting, and out-of-sample research.
 
 > Research and educational software only. Not investment advice and not intended for live trading.
 
 ## Research question
 
-Can machine-learning signals improve risk-adjusted out-of-sample performance over simple systematic baselines after realistic trading frictions?
+Can machine-learning signals improve risk-adjusted out-of-sample performance over simple systematic baselines after trading frictions?
 
-## Architecture
+## Research architecture
 
-`Market data -> feature engineering -> ML/rule signals -> portfolio optimization -> risk controls -> execution model -> backtest -> OOS evaluation`
+`Market data -> features -> model/rule signals -> portfolio construction -> risk controls -> execution costs -> backtest -> walk-forward OOS -> robustness analysis -> experiment registry`
 
-The project is deliberately split into replaceable research components so that a strategy, model, or portfolio method can be tested without rewriting the whole system.
+The system separates research components so models, portfolio methods, and assumptions can be changed without rewriting the backtest layer.
 
-## Current capabilities
+## Current research capabilities
 
 - Multi-asset price-panel alignment and return calculation.
-- Rule-based baselines: buy-and-hold, momentum, moving-average crossover.
-- Leakage-aware chronological train/test evaluation.
+- Buy-and-hold, momentum, and moving-average baselines.
 - Logistic Regression and XGBoost signal models.
-- Constrained minimum-variance and risk-parity portfolio weights.
-- Transaction costs and position turnover in the backtest engine.
-- Volatility targeting and drawdown guardrails.
-- Expanding or rolling walk-forward refits with independent model instances.
-- Unit tests for key research invariants and GitHub Actions CI.
+- Chronological walk-forward evaluation with optional embargo/gap.
+- Time-series parameter search using chronological folds.
+- Rolling portfolio construction using trailing observations only.
+- Long-only constrained minimum-variance and risk-parity optimization.
+- Weight caps that remain valid after normalization.
+- Volatility targeting, drawdown controls, transaction costs, and turnover.
+- Benchmark-relative diagnostics including active return and tracking error.
+- Rolling Sharpe, calendar-year subperiod analysis, parameter sensitivity, and moving-block bootstrap uncertainty intervals.
+- JSON experiment registry with configuration, metrics, metadata, and reproducibility fields.
+- Unit tests and GitHub Actions CI.
 
 ## Quickstart
 
@@ -35,60 +39,70 @@ pip install -e ".[dev]"
 python scripts/download_data.py
 python scripts/run_backtest.py
 python scripts/train_model.py
+python scripts/run_multi_asset.py
+python scripts/run_research.py
 pytest
 ```
 
-The default configuration uses SPY daily data. Edit `configs/default.yaml` to change symbols, dates, costs, and model parameters.
+The default research universe is `SPY, QQQ, IWM, TLT, GLD`. Edit `configs/default.yaml` to change symbols, dates, costs, model settings, portfolio constraints, and research windows.
 
 ## Methodological safeguards
 
-- Signals are shifted before next-period returns are applied.
-- Features use only information available at or before each timestamp.
-- Train/test splits are chronological rather than randomly shuffled.
-- Portfolio covariance estimates must be formed from historical observations only when used in research experiments.
-- Transaction costs are charged on position changes.
-- ML models are compared against simple baselines.
-- Walk-forward evaluation is available before interpreting out-of-sample performance.
+- Features must be computed from information available at or before each timestamp.
+- Training and evaluation are chronological; random shuffling is avoided for time-series experiments.
+- Walk-forward predictions are generated from independently fitted estimators.
+- An optional gap/embargo prevents training observations immediately adjacent to the test window from being used.
+- Portfolio weights are estimated from trailing observations only and lagged before returns are applied.
+- Transaction costs are charged on turnover.
+- ML signals are compared with simple baselines and benchmark assets.
+- Robustness analysis reports subperiod behavior and uncertainty rather than relying on one point estimate.
 
-## Structure
+## Research structure
 
 ```text
-configs/                 experiment configuration
-data/                    local datasets (ignored)
-scripts/                 reproducible CLI entry points
+configs/                       experiment configuration
+data/                         local datasets (ignored)
+scripts/                      reproducible CLI entry points
 src/quant_system/
-  data/                  download/load/multi-asset panels
-  features/              feature engineering
-  strategies/            rule-based signals
-  models/                ML training/prediction
-  portfolio/             weights and optimization
-  risk/                   volatility and risk controls
-  backtest/              simulation, costs, metrics
-  evaluation/            walk-forward OOS evaluation
-tests/                   unit tests
-reports/                 generated research outputs
-.github/workflows/       CI
+  data/                       download/load/multi-asset panels
+  features/                   feature engineering
+  strategies/                 rule-based signals
+  models/                     ML training/prediction
+  portfolio/                  optimization and rolling weights
+  risk/                       volatility and risk controls
+  backtest/                   simulation, costs, metrics
+  evaluation/                 OOS, time-series splits, robustness, registry
+ tests/                        research invariants and regression tests
+ reports/experiments/          generated experiment records
+ .github/workflows/            CI
 ```
 
 ## Research roadmap
 
-### V2 — Research engine
-- Multi-asset experiments
-- XGBoost signal model
-- Portfolio optimization
-- Volatility targeting
-- Walk-forward OOS evaluation
+### V4 — Research Engine
 
-### V3 — Robustness
-- Slippage and spread assumptions
-- Parameter sensitivity grids
-- Subperiod and regime analysis
-- Bootstrap confidence intervals
-- Probability calibration and threshold analysis
+- Leakage-aware time-series hyperparameter search.
+- Rolling/expanding walk-forward evaluation with embargo support.
+- Rolling portfolio construction with lagged weights.
+- Benchmark and active-risk diagnostics.
+- Subperiod/regime stability checks.
+- Moving-block bootstrap uncertainty intervals.
+- Parameter sensitivity without cherry-picking a single configuration.
+- Reproducible experiment registry.
 
-### V4 — Research product
-- Experiment registry and reproducible result artifacts
-- Research notebooks and report generation
-- FastAPI inference service
-- Dashboard for signals, portfolio, drawdown, and diagnostics
-- Docker and production-style CI/CD
+### V5 — Research Product
+
+- Research notebooks and publication-style report generation.
+- Signal probability calibration and threshold analysis.
+- Feature importance / model diagnostics.
+- FastAPI inference service.
+- Dashboard for signals, portfolio, drawdown, turnover, and diagnostics.
+- Docker and production-style CI/CD.
+
+## Reproducibility
+
+Research artifacts should record the experiment configuration, timestamp, and source commit when `GIT_COMMIT` is available. Generated datasets and reports are kept out of version control unless explicitly selected for publication.
+
+## Disclaimer
+
+This repository is for research and education. Backtests are historical simulations and can contain model error, estimation error, data issues, and assumptions that differ from real execution. Nothing in this repository constitutes investment advice.
