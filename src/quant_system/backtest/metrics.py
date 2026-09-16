@@ -1,5 +1,11 @@
 import numpy as np
 
+# A dispersion below this is floating-point residue, not variation. Pandas
+# returns 1.8e-18 for the standard deviation of ten identical values, so an
+# `== 0` guard never fires and a flat return series divides by that residue:
+# a constant 1% a day reported a Sharpe of 8.7e+16 before this threshold.
+_ZERO_DISPERSION = 1e-15
+
 
 def equity_curve(r, initial_capital=100000):
     return initial_capital * (1 + r.fillna(0)).cumprod()
@@ -18,13 +24,14 @@ def volatility(r, periods=252):
 
 def sharpe(r):
     r = r.dropna()
-    return np.nan if r.std(ddof=1) == 0 else r.mean() / r.std(ddof=1) * np.sqrt(252)
+    s = r.std(ddof=1)
+    return np.nan if not np.isfinite(s) or s <= _ZERO_DISPERSION else r.mean() / s * np.sqrt(252)
 
 
 def sortino(r):
     r = r.dropna()
     d = r[r < 0].std(ddof=1)
-    return np.nan if d == 0 or np.isnan(d) else r.mean() / d * np.sqrt(252)
+    return np.nan if not np.isfinite(d) or d <= _ZERO_DISPERSION else r.mean() / d * np.sqrt(252)
 
 
 def max_drawdown(r):

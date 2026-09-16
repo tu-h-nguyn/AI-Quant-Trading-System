@@ -78,8 +78,10 @@ def subperiod_summary(returns: pd.Series, periods_per_year: int = 252) -> pd.Dat
                 "observations": int(len(r)),
                 "return": float((1 + r).prod() - 1),
                 "annualized_volatility": float(vol),
+                # Same threshold as backtest.metrics.sharpe: a subperiod with no
+                # real variation must report nan, not a ratio against float noise.
                 "sharpe": float(r.mean() / r.std(ddof=1) * np.sqrt(periods_per_year))
-                if r.std(ddof=1) > 0
+                if r.std(ddof=1) > 1e-15
                 else float("nan"),
             }
         )
