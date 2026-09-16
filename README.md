@@ -1,37 +1,69 @@
 # AI Quant Trading System
 
-End-to-end quantitative research platform for systematic trading experiments with machine-learning signals, portfolio construction, risk controls, transaction-cost-aware backtesting, and out-of-sample research.
+A research-grade, end-to-end AI quantitative trading laboratory focused on one question: **does a leakage-aware machine-learning signal add value out of sample after trading frictions, relative to simple trading rules?**
 
 > Research and educational software only. Not investment advice and not intended for live trading.
 
-## Research question
+## Flagship study
 
-Can a systematic signal improve risk-adjusted out-of-sample performance after trading frictions, while remaining stable across time and modeling assumptions?
+The primary artifact is `scripts/run_flagship_study.py`. It runs the same experiment across **SPY, QQQ, IWM, TLT, and GLD** and evaluates:
 
-## Research architecture
+| Family | Strategy |
+|---|---|
+| Baseline | Buy & Hold |
+| Baseline | Momentum |
+| Baseline | Moving-average crossover |
+| ML | Logistic Regression |
+| ML | XGBoost |
 
-`Market data -> features -> model/rule signals -> portfolio construction -> risk controls -> execution costs -> backtest -> walk-forward OOS -> robustness -> diagnostics -> report -> experiment registry`
+The ML models are evaluated with **chronological walk-forward refits**, a configurable **embargo/gap**, and **transaction-cost-aware backtesting**. Results are written to `reports/flagship_research_report.md`, `reports/flagship_results.csv`, and `reports/flagship_aggregate_results.csv` and registered as machine-readable experiment metadata.
 
-The system separates research components so models, portfolio methods, validation schemes, and assumptions can be changed without rewriting the backtest layer.
+### Research loop
 
-## Current research capabilities
+```mermaid
+flowchart LR
+    A[Market data] --> B[Feature engineering]
+    B --> C[Baseline + ML signals]
+    C --> D[Walk-forward OOS]
+    D --> E[Portfolio / execution]
+    E --> F[Costs + turnover]
+    F --> G[Performance metrics]
+    G --> H[Robustness + bootstrap]
+    H --> I[Report + experiment registry]
+```
 
-- Multi-asset price-panel alignment and return calculation.
+## What makes the project quant-research oriented
+
+The repository is deliberately organized around **research validity**, not only model training. The core pipeline separates data, features, models, portfolio construction, risk, execution assumptions, validation, diagnostics, and reporting so that an experiment can be changed without silently changing its backtest logic.
+
+Key safeguards include:
+
+- chronological train/test ordering; no random shuffling for time series;
+- walk-forward refitting from independent estimator clones;
+- configurable gap/embargo for labels with forward horizons;
+- features computed from current/past information only;
+- portfolio weights estimated from trailing windows and lagged before return application;
+- transaction costs charged on turnover;
+- explicit comparison against non-ML baselines;
+- moving-block bootstrap diagnostics for dependent daily returns;
+- machine-readable experiment records containing configuration and source commit.
+
+## Research capabilities
+
+- Multi-asset OHLCV download and aligned return panels.
+- Lagged return, volatility, moving-average, and volume features.
+- Logistic Regression and XGBoost classifiers.
+- Walk-forward out-of-sample probability generation.
+- Time-series split infrastructure with gap support.
 - Buy-and-hold, momentum, and moving-average baselines.
-- Logistic Regression and XGBoost signal models.
-- Chronological walk-forward evaluation with optional embargo/gap.
-- Time-series parameter search using chronological folds.
+- Long-only constrained minimum-variance and risk-parity allocation.
 - Rolling portfolio construction using trailing observations only.
-- Long-only constrained minimum-variance and risk-parity optimization.
-- Weight caps that remain valid after normalization.
-- Volatility targeting, drawdown controls, transaction costs, and turnover.
-- Benchmark-relative diagnostics including active return and tracking error.
-- Rolling Sharpe, calendar-year subperiod analysis, parameter sensitivity, and moving-block bootstrap uncertainty intervals.
-- Probability calibration, threshold diagnostics, and model feature-importance analysis.
-- Reproducible equity, drawdown, turnover, rolling-Sharpe, calibration, and feature-importance figures.
-- Publication-style Markdown research report generation.
-- JSON experiment registry with configuration, metrics, metadata, and reproducibility fields.
-- Unit tests and GitHub Actions CI.
+- Volatility targeting and drawdown guardrails.
+- Transaction-cost and turnover modeling.
+- Benchmark-relative diagnostics, rolling Sharpe, subperiod analysis, and bootstrap intervals.
+- Probability calibration, threshold diagnostics, and feature importance.
+- Automated research figures and Markdown reports.
+- Unit tests, linting, and GitHub Actions reproducibility checks.
 
 ## Quickstart
 
@@ -40,89 +72,78 @@ python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
 pip install -e ".[dev]"
 python scripts/download_data.py
-python scripts/run_research.py
+python scripts/run_flagship_study.py
 python scripts/run_v5_report.py
+python scripts/run_research.py
 pytest
+ruff check src scripts
 ```
 
-The default research universe is `SPY, QQQ, IWM, TLT, GLD`. Edit `configs/default.yaml` to change symbols, dates, costs, model settings, portfolio constraints, and research windows.
+The default universe is configured in `configs/default.yaml`. The configuration also controls the label horizon, walk-forward geometry, embargo, transaction costs, portfolio constraints, and bootstrap settings.
 
-## V5 evidence layer
+## Flagship outputs
 
-`python scripts/run_v5_report.py` produces a complete model-evaluation artifact for the first symbol in the configured universe:
+After a successful run:
 
-- out-of-sample classification metrics;
-- probability calibration table, Brier score, and ECE;
-- threshold sensitivity table;
-- native feature importance for the fitted model;
-- strategy equity and drawdown curves;
-- turnover and rolling-Sharpe diagnostics;
-- a Markdown report under `reports/v5_research_report.md`;
-- a machine-readable experiment record under `reports/experiments/`.
+- `reports/flagship_research_report.md` — the human-readable research narrative and results tables;
+- `reports/flagship_results.csv` — per-asset, per-strategy OOS results;
+- `reports/flagship_aggregate_results.csv` — equal-weight aggregate OOS results;
+- `reports/experiments/flagship_oos_study.json` — reproducibility metadata and source commit;
+- `reports/v5_research_report.md` — deeper single-asset diagnostics;
+- `reports/figures/` — equity, drawdown, turnover, calibration, rolling-Sharpe, and feature-importance plots.
 
-The diagnostics are deliberately descriptive. Thresholds and feature rankings are not treated as proof of predictive causality and should not be selected from the final test set without validation.
+The flagship report is intentionally designed so the central claim can be **supported, weakened, or rejected by the observed evidence**. A model that fails to beat a simple baseline is a valid research result; the repository does not assume profitability in advance.
 
-## Methodological safeguards
+## Methodology notes
 
-- Features must be computed from information available at or before each timestamp.
-- Training and evaluation are chronological; random shuffling is avoided for time-series experiments.
-- Walk-forward predictions are generated from independently fitted estimators.
-- An optional gap/embargo prevents training observations immediately adjacent to the test window from being used.
-- Portfolio weights are estimated from trailing observations only and lagged before returns are applied.
-- Transaction costs are charged on turnover.
-- ML signals are compared with simple baselines and benchmark assets.
-- Robustness analysis reports subperiod behavior and uncertainty rather than relying on one point estimate.
-- Research artifacts record the source commit when `GIT_COMMIT` is available.
+The ML target is the sign of the configured forward return horizon. The trading signal threshold is fixed from configuration and is not optimized on the final OOS sample. Model AUC is reported as a predictive diagnostic, while trading metrics are calculated from a separate cost-aware backtest.
 
-## Research structure
+The aggregate strategy series is the equal-weight average of the per-asset OOS return series. This is intentionally transparent rather than being treated as an optimized portfolio-selection result.
+
+Backtests remain historical simulations. Market-data revisions, execution slippage, liquidity constraints, borrow costs, corporate actions, regime shifts, and model risk can materially change live outcomes.
+
+## Repository structure
 
 ```text
 configs/                       experiment configuration
 data/                          local datasets (ignored)
-scripts/                       reproducible CLI entry points
+scripts/
+  download_data.py             reproducible data acquisition
+  run_flagship_study.py        main multi-asset research experiment
+  run_v5_report.py             deeper diagnostics for first asset
+  run_research.py              rolling portfolio research
 src/quant_system/
-  data/                        download/load/multi-asset panels
+  data/                        acquisition/loading/panel construction
   features/                    feature engineering
-  models/                      ML training/prediction
-  portfolio/                   optimization and rolling weights
-  risk/                        volatility and risk controls
+  models/                      ML estimators and signal transforms
+  portfolio/                   portfolio optimization and rolling weights
+  risk/                        volatility and drawdown controls
   backtest/                    simulation, costs, metrics
-  evaluation/                  OOS, splits, robustness, diagnostics, reports
- tests/                        research invariants and regression tests
- reports/experiments/          generated experiment records
- reports/figures/              generated figures
- .github/workflows/            CI
+  evaluation/                  OOS, diagnostics, robustness, reports
+  config.py                    shared experiment configuration loader
+tests/                         research invariants and regressions
+reports/experiments/           generated experiment metadata
+reports/figures/               generated research figures
+.github/workflows/              reproducible CI + artifact publication
 ```
 
 ## Roadmap
 
-### V4 — Research Engine
-
-- Leakage-aware time-series validation.
-- Rolling/expanding walk-forward evaluation.
-- Rolling portfolio construction.
-- Benchmark-relative and subperiod diagnostics.
-- Block-bootstrap uncertainty analysis.
-- Parameter sensitivity.
-- Reproducible experiment registry.
-
-### V5 — Evidence / Research Product
-
-- Probability calibration and threshold diagnostics.
-- Model feature-importance diagnostics.
-- Reproducible research figures.
-- Publication-style report generation.
-
 ### V6 — Research-to-Engineering
 
-- FastAPI inference service.
-- Dashboard for signals, portfolio, drawdown, turnover, and diagnostics.
-- Dockerized workflows.
-- Production-style CI/CD and scheduled research runs.
+- Hyperparameter selection nested inside time-series validation.
+- Cross-sectional factor pipeline and portfolio-level ML ranking.
+- More realistic execution model: spread, commissions, slippage, and market impact.
+- Statistical tests for forecast and return significance.
+- Experiment comparison dashboard.
+- FastAPI inference service and Dockerized execution environment.
 
-## Reproducibility
+### V7 — Production research stack
 
-Research outputs should record configuration, timestamp, and source commit. Generated datasets and figures are excluded from version control unless explicitly selected for publication.
+- Dataset versioning and data-quality checks.
+- Scheduled retraining and monitoring.
+- Model registry and run lineage.
+- Paper-trading interface with audit logs.
 
 ## Disclaimer
 
