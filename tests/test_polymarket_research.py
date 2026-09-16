@@ -238,6 +238,66 @@ def test_anchored_model_is_cloneable_and_selects_its_own_penalty():
     assert isinstance(clone(fitted), type(fitted))
 
 
+def _separable_panel():
+    """Labels perfectly predictable from momentum, as a thin sample can be."""
+    rows = []
+    for market in range(160):
+        drift = 0.004 if market % 2 else -0.004
+        for step in range(12):
+            rows.append(
+                {
+                    "market_id": f"R{market}",
+                    "timestamp": pd.Timestamp("2025-01-01", tz="UTC")
+                    + pd.Timedelta(days=step),
+                    "price": min(max(0.5 + drift * step, 0.05), 0.95),
+                    "end_date": pd.Timestamp("2025-06-01", tz="UTC"),
+                    "volume": 250_000,
+                    "liquidity": 20_000,
+                    "label": market % 2,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_the_correction_may_move_the_price_but_never_replace_it():
+    # Separable labels fit a correction of six logits or more, which turns a
+    # 52-cent ask into a claimed 0.9998 and a 47-cent edge that saturates every
+    # position cap at once. Anchoring makes the price the default; the bound is
+    # what stops the correction overruling it.
+    frame = build_snapshot_features(
+        _separable_panel(), momentum_windows=(1, 5), volatility_window=5
+    )
+    X, y, _ = design_matrix(frame)
+    price = frame.loc[X.index, "price"].astype(float)
+
+    unbounded = market_anchored_model()
+    unbounded.max_logit_deviation = None
+    loose = unbounded.fit(X, y).predict_proba(X)[:, 1]
+
+    bounded = market_anchored_model().fit(X, y)
+    tight = bounded.predict_proba(X)[:, 1]
+
+    anchor = np.log(price / (1 - price))
+    assert np.abs(np.log(loose / (1 - loose)) - anchor).max() > 4.0
+    assert np.abs(np.log(tight / (1 - tight)) - anchor).max() <= 3.0 + 1e-9
+    assert (loose > 0.99).sum() > 0 and (tight > 0.99).sum() == 0
+
+
+def test_the_bound_does_not_touch_a_forecast_that_stays_inside_it():
+    # On labels with the noise a real venue has, the fitted correction is well
+    # inside the bound, so it must leave every forecast byte-identical.
+    panel = simulate_panel(PanelSpec(n_markets=200, observations_per_market=10, seed=5))
+    frame = build_snapshot_features(panel, momentum_windows=(1,), volatility_window=0)
+    X, y, _ = design_matrix(frame)
+
+    unbounded = market_anchored_model()
+    unbounded.max_logit_deviation = None
+    assert np.allclose(
+        unbounded.fit(X, y).predict_proba(X)[:, 1],
+        market_anchored_model().fit(X, y).predict_proba(X)[:, 1],
+    )
+
+
 def test_anchored_model_requires_its_anchor_column():
     X = pd.DataFrame({"feat_a": [0.0, 1.0, 0.0, 1.0]})
     with pytest.raises(ValueError):

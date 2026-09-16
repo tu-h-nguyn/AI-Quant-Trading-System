@@ -239,6 +239,16 @@ class MarketAnchoredClassifier(BaseEstimator, ClassifierMixin):
     than usual: the achievable skill over an efficient price is a few
     thousandths of a Brier point, which is smaller than the swing an alpha
     chosen in hindsight can manufacture.
+
+    ``max_logit_deviation`` enforces the other half of the anchoring idea. The
+    offset makes the price the default; nothing else stops the correction from
+    growing without bound and overruling it. Regularization discourages that but
+    does not forbid it, and a training window whose labels happen to be
+    separable -- a thin or unlucky sample -- produces a fitted correction of six
+    logits or more, turning a 52-cent ask into a claimed 0.9998 and a 47-cent
+    edge that saturates every position cap at once. On a panel with the label
+    noise a real venue has, the fitted deviation stays under about two logits and
+    the bound never binds; it exists for the sample that is not like that.
     """
 
     def __init__(
@@ -248,6 +258,7 @@ class MarketAnchoredClassifier(BaseEstimator, ClassifierMixin):
         alpha: float | str = "auto",
         alpha_grid: tuple[float, ...] = (0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0),
         validation_fraction: float = 0.3,
+        max_logit_deviation: float = 3.0,
         n_estimators: int = 200,
         max_depth: int = 2,
         learning_rate: float = 0.05,
@@ -258,6 +269,7 @@ class MarketAnchoredClassifier(BaseEstimator, ClassifierMixin):
         self.alpha = alpha
         self.alpha_grid = alpha_grid
         self.validation_fraction = validation_fraction
+        self.max_logit_deviation = max_logit_deviation
         self.n_estimators = n_estimators
         self.max_depth = max_depth
         self.learning_rate = learning_rate
@@ -314,6 +326,20 @@ class MarketAnchoredClassifier(BaseEstimator, ClassifierMixin):
             )
         else:
             positive = self.estimator_.predict_proba(features, base_margin=offset)[:, 1]
+
+        if self.max_logit_deviation is not None:
+            # The correction may move the price, never replace it. The bound is
+            # stated in logits but applied in probability space, where sigmoid's
+            # monotonicity makes it the same constraint. Clipping the margin
+            # instead would force the boosted backend through logit and back,
+            # and rebuilding an offset by subtracting and re-adding it perturbs
+            # the last bit -- either way a forecast comfortably inside the bound
+            # would shift by ~1e-14 for no reason. Here a bound that does not
+            # bind returns the estimator's own number untouched.
+            bound = abs(float(self.max_logit_deviation))
+            positive = np.clip(
+                positive, _sigmoid(offset - bound), _sigmoid(offset + bound)
+            )
         positive = np.clip(np.asarray(positive, dtype=float), _EPSILON, 1.0 - _EPSILON)
         return np.column_stack([1.0 - positive, positive])
 
