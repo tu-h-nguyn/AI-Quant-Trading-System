@@ -1,27 +1,41 @@
 # AI Quant Trading System
 
-End-to-end quantitative research platform for systematic trading experiments with machine-learning signals, transaction-cost-aware backtesting, portfolio construction, risk analysis, and walk-forward evaluation.
+End-to-end quantitative research platform for systematic trading experiments with machine-learning signals, portfolio construction, risk controls, transaction-cost-aware backtesting, and walk-forward evaluation.
 
 > Research and educational software only. Not investment advice and not intended for live trading.
 
 ## Research question
 
-Can machine-learning signals improve risk-adjusted out-of-sample performance over simple systematic baselines after transaction costs?
+Can machine-learning signals improve risk-adjusted out-of-sample performance over simple systematic baselines after realistic trading frictions?
 
-## Pipeline
+## Architecture
 
-`Market data -> features -> signals -> portfolio -> risk controls -> backtest -> walk-forward evaluation`
+`Market data -> feature engineering -> ML/rule signals -> portfolio optimization -> risk controls -> execution model -> backtest -> OOS evaluation`
+
+The project is deliberately split into replaceable research components so that a strategy, model, or portfolio method can be tested without rewriting the whole system.
+
+## Current capabilities
+
+- Multi-asset price-panel alignment and return calculation.
+- Rule-based baselines: buy-and-hold, momentum, moving-average crossover.
+- Leakage-aware chronological train/test evaluation.
+- Logistic Regression and XGBoost signal models.
+- Constrained minimum-variance and risk-parity portfolio weights.
+- Transaction costs and position turnover in the backtest engine.
+- Volatility targeting and drawdown guardrails.
+- Expanding or rolling walk-forward refits with independent model instances.
+- Unit tests for key research invariants and GitHub Actions CI.
 
 ## Quickstart
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
-pip install -r requirements.txt
+pip install -e ".[dev]"
 python scripts/download_data.py
 python scripts/run_backtest.py
 python scripts/train_model.py
-pytest -q
+pytest
 ```
 
 The default configuration uses SPY daily data. Edit `configs/default.yaml` to change symbols, dates, costs, and model parameters.
@@ -29,37 +43,52 @@ The default configuration uses SPY daily data. Edit `configs/default.yaml` to ch
 ## Methodological safeguards
 
 - Signals are shifted before next-period returns are applied.
+- Features use only information available at or before each timestamp.
 - Train/test splits are chronological rather than randomly shuffled.
-- Transaction costs are charged on turnover.
-- ML is evaluated against simple baselines.
-- Walk-forward evaluation is included before interpreting out-of-sample results.
+- Portfolio covariance estimates must be formed from historical observations only when used in research experiments.
+- Transaction costs are charged on position changes.
+- ML models are compared against simple baselines.
+- Walk-forward evaluation is available before interpreting out-of-sample performance.
 
 ## Structure
 
 ```text
 configs/                 experiment configuration
 data/                    local datasets (ignored)
-notebooks/               research notebooks
 scripts/                 reproducible CLI entry points
 src/quant_system/
-  data/                  download/load
+  data/                  download/load/multi-asset panels
   features/              feature engineering
   strategies/            rule-based signals
   models/                ML training/prediction
-  portfolio/             weights and constraints
-  risk/                   risk metrics
-  backtest/              simulation and costs
-  evaluation/            walk-forward analysis
+  portfolio/             weights and optimization
+  risk/                   volatility and risk controls
+  backtest/              simulation, costs, metrics
+  evaluation/            walk-forward OOS evaluation
 tests/                   unit tests
-reports/                 generated figures
+reports/                 generated research outputs
+.github/workflows/       CI
 ```
 
-## Roadmap
+## Research roadmap
 
-1. Multi-asset portfolio construction
-2. XGBoost/LightGBM models
-3. Volatility targeting and risk parity
-4. Slippage and execution assumptions
-5. Experiment tracking
-6. FastAPI service and dashboard
-7. CI/CD
+### V2 — Research engine
+- Multi-asset experiments
+- XGBoost signal model
+- Portfolio optimization
+- Volatility targeting
+- Walk-forward OOS evaluation
+
+### V3 — Robustness
+- Slippage and spread assumptions
+- Parameter sensitivity grids
+- Subperiod and regime analysis
+- Bootstrap confidence intervals
+- Probability calibration and threshold analysis
+
+### V4 — Research product
+- Experiment registry and reproducible result artifacts
+- Research notebooks and report generation
+- FastAPI inference service
+- Dashboard for signals, portfolio, drawdown, and diagnostics
+- Docker and production-style CI/CD
