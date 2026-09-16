@@ -1,5 +1,5 @@
 data:
-  symbols: ["SPY"]
+  symbols: ["SPY", "QQQ", "IWM", "TLT", "GLD"]
   start: "2015-01-01"
   end: null
   interval: "1d"
@@ -16,3 +16,11 @@ model:
   test_size: 0.2
   threshold: 0.5
   random_state: 42
+portfolio:
+  max_weight: 0.40
+  method: "min_variance"
+risk:
+  target_volatility: 0.10
+  max_leverage: 1.50
+  volatility_window: 20
+  max_drawdown: 0.20
