@@ -88,10 +88,10 @@ src/quant_system/
   risk/                        volatility and risk controls
   backtest/                    simulation, costs, metrics
   evaluation/                  OOS, splits, robustness, diagnostics, reports
- tests/                         research invariants and regression tests
- reports/experiments/           generated experiment records
- reports/figures/               generated figures
- .github/workflows/             CI
+ tests/                        research invariants and regression tests
+ reports/experiments/          generated experiment records
+ reports/figures/              generated figures
+ .github/workflows/            CI
 ```
 
 ## Roadmap
