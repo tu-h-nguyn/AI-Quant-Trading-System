@@ -6,13 +6,13 @@ End-to-end quantitative research platform for systematic trading experiments wit
 
 ## Research question
 
-Can machine-learning signals improve risk-adjusted out-of-sample performance over simple systematic baselines after trading frictions?
+Can a systematic signal improve risk-adjusted out-of-sample performance after trading frictions, while remaining stable across time and modeling assumptions?
 
 ## Research architecture
 
-`Market data -> features -> model/rule signals -> portfolio construction -> risk controls -> execution costs -> backtest -> walk-forward OOS -> robustness analysis -> experiment registry`
+`Market data -> features -> model/rule signals -> portfolio construction -> risk controls -> execution costs -> backtest -> walk-forward OOS -> robustness -> diagnostics -> report -> experiment registry`
 
-The system separates research components so models, portfolio methods, and assumptions can be changed without rewriting the backtest layer.
+The system separates research components so models, portfolio methods, validation schemes, and assumptions can be changed without rewriting the backtest layer.
 
 ## Current research capabilities
 
@@ -27,6 +27,9 @@ The system separates research components so models, portfolio methods, and assum
 - Volatility targeting, drawdown controls, transaction costs, and turnover.
 - Benchmark-relative diagnostics including active return and tracking error.
 - Rolling Sharpe, calendar-year subperiod analysis, parameter sensitivity, and moving-block bootstrap uncertainty intervals.
+- Probability calibration, threshold diagnostics, and model feature-importance analysis.
+- Reproducible equity, drawdown, turnover, rolling-Sharpe, calibration, and feature-importance figures.
+- Publication-style Markdown research report generation.
 - JSON experiment registry with configuration, metrics, metadata, and reproducibility fields.
 - Unit tests and GitHub Actions CI.
 
@@ -37,14 +40,27 @@ python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
 pip install -e ".[dev]"
 python scripts/download_data.py
-python scripts/run_backtest.py
-python scripts/train_model.py
-python scripts/run_multi_asset.py
 python scripts/run_research.py
+python scripts/run_v5_report.py
 pytest
 ```
 
 The default research universe is `SPY, QQQ, IWM, TLT, GLD`. Edit `configs/default.yaml` to change symbols, dates, costs, model settings, portfolio constraints, and research windows.
+
+## V5 evidence layer
+
+`python scripts/run_v5_report.py` produces a complete model-evaluation artifact for the first symbol in the configured universe:
+
+- out-of-sample classification metrics;
+- probability calibration table, Brier score, and ECE;
+- threshold sensitivity table;
+- native feature importance for the fitted model;
+- strategy equity and drawdown curves;
+- turnover and rolling-Sharpe diagnostics;
+- a Markdown report under `reports/v5_research_report.md`;
+- a machine-readable experiment record under `reports/experiments/`.
+
+The diagnostics are deliberately descriptive. Thresholds and feature rankings are not treated as proof of predictive causality and should not be selected from the final test set without validation.
 
 ## Methodological safeguards
 
@@ -56,52 +72,57 @@ The default research universe is `SPY, QQQ, IWM, TLT, GLD`. Edit `configs/defaul
 - Transaction costs are charged on turnover.
 - ML signals are compared with simple baselines and benchmark assets.
 - Robustness analysis reports subperiod behavior and uncertainty rather than relying on one point estimate.
+- Research artifacts record the source commit when `GIT_COMMIT` is available.
 
 ## Research structure
 
 ```text
 configs/                       experiment configuration
-data/                         local datasets (ignored)
-scripts/                      reproducible CLI entry points
+data/                          local datasets (ignored)
+scripts/                       reproducible CLI entry points
 src/quant_system/
-  data/                       download/load/multi-asset panels
-  features/                   feature engineering
-  strategies/                 rule-based signals
-  models/                     ML training/prediction
-  portfolio/                  optimization and rolling weights
-  risk/                       volatility and risk controls
-  backtest/                   simulation, costs, metrics
-  evaluation/                 OOS, time-series splits, robustness, registry
- tests/                        research invariants and regression tests
- reports/experiments/          generated experiment records
- .github/workflows/            CI
+  data/                        download/load/multi-asset panels
+  features/                    feature engineering
+  models/                      ML training/prediction
+  portfolio/                   optimization and rolling weights
+  risk/                        volatility and risk controls
+  backtest/                    simulation, costs, metrics
+  evaluation/                  OOS, splits, robustness, diagnostics, reports
+ tests/                         research invariants and regression tests
+ reports/experiments/           generated experiment records
+ reports/figures/               generated figures
+ .github/workflows/             CI
 ```
 
-## Research roadmap
+## Roadmap
 
 ### V4 — Research Engine
 
-- Leakage-aware time-series hyperparameter search.
-- Rolling/expanding walk-forward evaluation with embargo support.
-- Rolling portfolio construction with lagged weights.
-- Benchmark and active-risk diagnostics.
-- Subperiod/regime stability checks.
-- Moving-block bootstrap uncertainty intervals.
-- Parameter sensitivity without cherry-picking a single configuration.
+- Leakage-aware time-series validation.
+- Rolling/expanding walk-forward evaluation.
+- Rolling portfolio construction.
+- Benchmark-relative and subperiod diagnostics.
+- Block-bootstrap uncertainty analysis.
+- Parameter sensitivity.
 - Reproducible experiment registry.
 
-### V5 — Research Product
+### V5 — Evidence / Research Product
 
-- Research notebooks and publication-style report generation.
-- Signal probability calibration and threshold analysis.
-- Feature importance / model diagnostics.
+- Probability calibration and threshold diagnostics.
+- Model feature-importance diagnostics.
+- Reproducible research figures.
+- Publication-style report generation.
+
+### V6 — Research-to-Engineering
+
 - FastAPI inference service.
 - Dashboard for signals, portfolio, drawdown, turnover, and diagnostics.
-- Docker and production-style CI/CD.
+- Dockerized workflows.
+- Production-style CI/CD and scheduled research runs.
 
 ## Reproducibility
 
-Research artifacts should record the experiment configuration, timestamp, and source commit when `GIT_COMMIT` is available. Generated datasets and reports are kept out of version control unless explicitly selected for publication.
+Research outputs should record configuration, timestamp, and source commit. Generated datasets and figures are excluded from version control unless explicitly selected for publication.
 
 ## Disclaimer
 
