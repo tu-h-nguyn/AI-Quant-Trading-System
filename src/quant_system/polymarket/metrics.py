@@ -147,6 +147,14 @@ def trade_summary(trades: pd.DataFrame) -> dict[str, float]:
     ``per_trade_sharpe`` is deliberately *not* annualized. Prediction-market
     trades have heterogeneous holding periods and a lumpy binary payoff, so a
     252-day scaling would manufacture a number with no defensible frequency.
+
+    ``roi_per_capital_year`` is the metric that survives comparison across
+    holding periods: dollars of profit per dollar-year of capital committed,
+    which is the annualized return on capital actually at risk rather than on a
+    notional bankroll. ROI per trade rewards a position that ties up capital for
+    six months exactly as much as one that turns over in a week, which makes
+    hold-to-settlement look identical to a strategy recycling the same dollar
+    ten times.
     """
     if trades.empty:
         return {
@@ -158,6 +166,8 @@ def trade_summary(trades: pd.DataFrame) -> dict[str, float]:
             "mean_trade_return": float("nan"),
             "per_trade_sharpe": float("nan"),
             "mean_holding_days": float("nan"),
+            "capital_years": 0.0,
+            "roi_per_capital_year": float("nan"),
         }
     profit = trades["profit"].astype(float)
     capital = trades["capital"].astype(float)
@@ -167,6 +177,10 @@ def trade_summary(trades: pd.DataFrame) -> dict[str, float]:
         trades["holding_days"].astype(float)
         if "holding_days" in trades.columns
         else pd.Series(dtype=float)
+    )
+    # Dollar-years of capital committed: what the strategy actually consumed.
+    capital_years = (
+        float((capital * holding).sum() / 365.0) if not holding.empty else 0.0
     )
     return {
         "n_trades": float(len(trades)),
@@ -179,6 +193,10 @@ def trade_summary(trades: pd.DataFrame) -> dict[str, float]:
         if trade_return.std(ddof=1) > _EPSILON
         else float("nan"),
         "mean_holding_days": float(holding.mean()) if not holding.empty else float("nan"),
+        "capital_years": capital_years,
+        "roi_per_capital_year": float(profit.sum() / capital_years)
+        if capital_years > _EPSILON
+        else float("nan"),
     }
 
 

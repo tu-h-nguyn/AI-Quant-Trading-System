@@ -82,6 +82,28 @@
     "risk": {
       "bankroll": 10000.0,
       "drawdown_floor": 0.25,
+      "exit_rules": [
+        {
+          "exit_edge_fraction": null,
+          "name": "Hold to settlement",
+          "stop_loss_move": null
+        },
+        {
+          "exit_edge_fraction": 0.25,
+          "name": "Exit at 25% of edge remaining",
+          "stop_loss_move": null
+        },
+        {
+          "exit_edge_fraction": 0.5,
+          "name": "Exit at 50% of edge remaining",
+          "stop_loss_move": null
+        },
+        {
+          "exit_edge_fraction": 0.25,
+          "name": "Exit at 25%, 15c stop",
+          "stop_loss_move": 0.15
+        }
+      ],
       "kelly_multiplier": 0.25,
       "max_days_to_resolution": 365.0,
       "max_drawdown": 0.25,
@@ -124,5 +146,5 @@
     "n_strategies": 6,
     "panel_source": "simulation"
   },
-  "timestamp_utc": "2026-09-16T12:24:54.573613+00:00"
+  "timestamp_utc": "2026-09-16T12:30:23.383970+00:00"
 }

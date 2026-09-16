@@ -238,6 +238,29 @@ under-capitalized book quietly understate both its losses and its gains.
   spent twice, entries pay the ask, and positions pay exactly $1 per winning
   share.
 
+### Capital velocity
+
+A prediction-market position ties up capital until it settles, which can be
+months. Once its price has converged to the forecast it earns nothing while
+continuing to block every other opportunity — but exiting gives up the tail of
+the edge and pays the spread a second time.
+
+ROI per trade cannot settle that trade-off: it scores a six-month hold and a
+one-week turn identically. The backtester therefore reports **profit per
+capital-year** — dollars earned per dollar-year of capital actually committed —
+and the study runs the same forecast under each exit rule. On the synthetic
+panel:
+
+| Exit rule | Mean hold | ROI per trade | Profit per capital-year |
+|---|---:|---:|---:|
+| Hold to settlement | 30.6 days | +0.33 | +3.89 |
+| Exit at 25% of edge remaining | 7.4 days | +0.15 | +7.49 |
+| Exit at 50% of edge remaining | 6.5 days | +0.14 | +8.16 |
+
+Per-trade ROI halves and return per capital-year doubles. A rule that raises
+both would be suspicious — early exit can only recycle edge, never create it.
+Exit rules are off by default so hold-to-settlement stays the baseline.
+
 ```bash
 python scripts/run_polymarket_study.py      # flagship study → reports/polymarket_research_report.md
 ```

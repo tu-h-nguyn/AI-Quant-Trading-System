@@ -48,6 +48,11 @@ class TradeConfig:
     drawdown_floor: float = 0.25
     one_trade_per_market: bool = True
     min_notional: float = 5.0
+    # Exit rules, disabled by default so hold-to-settlement remains the baseline.
+    # Holding a converged position earns nothing while its capital is unavailable
+    # to anything else, so exiting early trades a slice of the edge for velocity.
+    exit_edge_fraction: float | None = None
+    stop_loss_move: float | None = None
 
     def __post_init__(self) -> None:
         if self.bankroll <= 0:
@@ -56,6 +61,10 @@ class TradeConfig:
             raise ValueError("default_spread and extra_slippage must be non-negative")
         if not 0.0 < self.max_total_exposure <= 1.0:
             raise ValueError("max_total_exposure must lie in (0, 1]")
+        if self.exit_edge_fraction is not None and not 0.0 <= self.exit_edge_fraction < 1.0:
+            raise ValueError("exit_edge_fraction must lie in [0, 1)")
+        if self.stop_loss_move is not None and not 0.0 < self.stop_loss_move <= 1.0:
+            raise ValueError("stop_loss_move must lie in (0, 1]")
 
 
 @dataclass
@@ -73,6 +82,8 @@ class BacktestResult:
 
 @dataclass
 class _OpenPosition:
+    """A live position, carrying what the exit rules need to evaluate it."""
+
     market_id: str
     question: str
     side: str
@@ -84,6 +95,7 @@ class _OpenPosition:
     entry_time: pd.Timestamp
     settle_time: pd.Timestamp
     label: int
+    entry_market_price: float = float("nan")
 
 
 def run_backtest(
@@ -138,6 +150,13 @@ def run_backtest(
         peak = max(peak, bankroll)
 
         market_id = str(row["market_id"])
+        if settings.exit_edge_fraction is not None or settings.stop_loss_move is not None:
+            bankroll, locked = _apply_exits(
+                open_positions, market_id, row, now, settings,
+                bankroll, locked, settled, equity_index, equity_values,
+            )
+            peak = max(peak, bankroll)
+
         if settings.one_trade_per_market and market_id in traded_markets:
             continue
         probability = row["probability"]
@@ -202,6 +221,7 @@ def run_backtest(
                 entry_time=now,
                 settle_time=settle_time,
                 label=int(row["label"]),
+                entry_market_price=market_price,
             )
         )
         locked += notional
@@ -249,6 +269,116 @@ def _entry_prices(
     )
 
 
+def _apply_exits(
+    open_positions: list[_OpenPosition],
+    market_id: str,
+    row: pd.Series,
+    now: pd.Timestamp,
+    settings: TradeConfig,
+    bankroll: float,
+    locked: float,
+    settled: list[dict],
+    equity_index: list[pd.Timestamp],
+    equity_values: list[float],
+) -> tuple[float, float]:
+    """Close any position in ``market_id`` whose exit condition has triggered.
+
+    Two rules, both optional:
+
+    ``exit_edge_fraction``
+        Close once the remaining edge has decayed to that fraction of the edge
+        at entry. A position whose price has converged to the forecast has
+        nothing left to earn, and the capital behind it is doing nothing.
+
+    ``stop_loss_move``
+        Close when the market has moved that far against the position. This is a
+        risk control, not an edge rule -- in a prediction market a price moving
+        against you usually means information arrived, but it will sometimes cut
+        a position that was right early.
+
+    Exits pay the spread a second time, so a rule that fires often can consume
+    more in frictions than the freed capital earns.
+    """
+    held = [item for item in open_positions if item.market_id == market_id]
+    if not held:
+        return bankroll, locked
+
+    market_price = float(np.clip(float(row["price"]), MIN_PRICE, MAX_PRICE))
+    for position in held:
+        if position.settle_time <= now:
+            continue  # settlement takes precedence and is handled by _settle_due
+        side_price = market_price if position.side == "yes" else 1.0 - market_price
+        entry_side_price = (
+            position.entry_market_price
+            if position.side == "yes"
+            else 1.0 - position.entry_market_price
+        )
+        exit_price = _exit_price(side_price, settings)
+
+        reason = ""
+        if settings.stop_loss_move is not None and np.isfinite(entry_side_price):
+            if entry_side_price - side_price >= settings.stop_loss_move:
+                reason = "stop_loss"
+        if not reason and settings.exit_edge_fraction is not None:
+            remaining = position.predicted_probability - exit_price
+            if position.predicted_edge > 0 and remaining < (
+                settings.exit_edge_fraction * position.predicted_edge
+            ):
+                reason = "convergence"
+        if not reason:
+            continue
+
+        proceeds = position.shares * exit_price
+        profit = proceeds - position.capital
+        bankroll += profit
+        locked = max(locked - position.capital, 0.0)
+        open_positions.remove(position)
+        settled.append(_trade_record(position, now, profit, exit_price, reason, bankroll))
+        equity_index.append(now)
+        equity_values.append(bankroll)
+    return bankroll, locked
+
+
+def _exit_price(side_price: float, settings: TradeConfig) -> float:
+    """Price received when closing a position, after crossing the spread again."""
+    half_spread = settings.default_spread / 2.0 + settings.extra_slippage
+    gross = side_price - half_spread
+    net = gross - taker_fee_per_share(
+        float(np.clip(gross, MIN_PRICE, MAX_PRICE)), settings.fee_bps
+    )
+    return float(np.clip(net, 0.0, 1.0))
+
+
+def _trade_record(
+    position: _OpenPosition,
+    closed_at: pd.Timestamp,
+    profit: float,
+    payoff: float,
+    reason: str,
+    bankroll: float,
+) -> dict:
+    """One row of the settled ledger, however the position was closed."""
+    return {
+        "market_id": position.market_id,
+        "question": position.question,
+        "side": position.side,
+        "entry_time": position.entry_time,
+        "settled_at": closed_at,
+        "holding_days": (closed_at - position.entry_time).total_seconds() / 86_400.0,
+        "shares": position.shares,
+        "capital": position.capital,
+        "entry_price": position.entry_price,
+        "predicted_probability": position.predicted_probability,
+        "predicted_edge": position.predicted_edge,
+        "label": position.label,
+        "payoff": float(payoff),
+        "profit": profit,
+        "profit_per_share": profit / position.shares if position.shares > 0 else np.nan,
+        "exit_reason": reason,
+        "bankroll_after": bankroll,
+    }
+
+
 def _settle_due(
     open_positions: list[_OpenPosition],
     now: pd.Timestamp,
@@ -270,25 +400,9 @@ def _settle_due(
         bankroll += profit
         locked = max(locked - position.capital, 0.0)
         settled.append(
-            {
-                "market_id": position.market_id,
-                "question": position.question,
-                "side": position.side,
-                "entry_time": position.entry_time,
-                "settled_at": position.settle_time,
-                "holding_days": (position.settle_time - position.entry_time).total_seconds()
-                / 86_400.0,
-                "shares": position.shares,
-                "capital": position.capital,
-                "entry_price": position.entry_price,
-                "predicted_probability": position.predicted_probability,
-                "predicted_edge": position.predicted_edge,
-                "label": position.label,
-                "payoff": float(payoff),
-                "profit": profit,
-                "profit_per_share": profit / position.shares if position.shares > 0 else np.nan,
-                "bankroll_after": bankroll,
-            }
+            _trade_record(
+                position, position.settle_time, profit, float(payoff), "settlement", bankroll
+            )
         )
         equity_index.append(position.settle_time)
         equity_values.append(bankroll)
@@ -309,7 +423,7 @@ def _empty_trades() -> pd.DataFrame:
         columns=[
             "market_id", "question", "side", "entry_time", "settled_at", "holding_days",
             "shares", "capital", "entry_price", "predicted_probability", "predicted_edge",
-            "label", "payoff", "profit", "profit_per_share", "bankroll_after",
+            "label", "payoff", "profit", "profit_per_share", "exit_reason", "bankroll_after",
         ]
     )
 

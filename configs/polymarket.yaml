@@ -41,6 +41,23 @@ risk:
   max_drawdown: 0.25
   drawdown_floor: 0.25
   one_trade_per_market: true
+  # Exit rules for the capital-velocity comparison. Holding a position whose
+  # price has converged earns nothing while its capital is unavailable to
+  # anything else, but exiting pays the spread a second time -- so the study
+  # runs the same forecast under each rule rather than picking one.
+  exit_rules:
+    - name: "Hold to settlement"
+      exit_edge_fraction: null
+      stop_loss_move: null
+    - name: "Exit at 25% of edge remaining"
+      exit_edge_fraction: 0.25
+      stop_loss_move: null
+    - name: "Exit at 50% of edge remaining"
+      exit_edge_fraction: 0.50
+      stop_loss_move: null
+    - name: "Exit at 25%, 15c stop"
+      exit_edge_fraction: 0.25
+      stop_loss_move: 0.15
 
 arbitrage:
   max_capital_per_basket: 1000.0

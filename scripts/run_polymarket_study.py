@@ -33,6 +33,8 @@ from quant_system.config import load_config
 from quant_system.evaluation.experiment import save_experiment
 from quant_system.evaluation.robustness import block_bootstrap_mean, percentile_interval
 from quant_system.polymarket.arbitrage import opportunities_frame, scan_markets
+from dataclasses import replace
+
 from quant_system.polymarket.backtest import (
     TradeConfig,
     run_backtest,
@@ -261,11 +263,14 @@ def main() -> None:
         )
 
     results = pd.DataFrame(rows)
+    velocity = _capital_velocity_study(config, frame.loc[X.index], forecasts, trade_config)
     making = _market_making_study(config, frame.loc[X.index], forecasts)
     report_dir = ROOT / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     results_path = report_dir / "polymarket_results.csv"
     results.to_csv(results_path, index=False)
+    velocity_path = report_dir / "polymarket_capital_velocity.csv"
+    velocity.to_csv(velocity_path, index=False)
     making_path = report_dir / "polymarket_market_making.csv"
     pd.concat(
         [sweep.assign(fair_value=name) for name, sweep in making.items()], ignore_index=True
@@ -301,6 +306,7 @@ def main() -> None:
         ceiling=ceiling,
         folds=folds,
         making=making,
+        velocity=velocity,
     )
 
     record = save_experiment(
@@ -325,6 +331,53 @@ def main() -> None:
     )
     print(f"\n{report_path.relative_to(ROOT)}")
     print(record.relative_to(ROOT))
+
+
+def _capital_velocity_study(
+    config: dict,
+    frame: pd.DataFrame,
+    forecasts: dict[str, pd.Series],
+    base_config: TradeConfig,
+) -> pd.DataFrame:
+    """Run the same forecast under each exit rule and price the holding period.
+
+    Comparing exit rules on ROI per trade answers the wrong question: a position
+    held six months and one closed in a week score identically even though the
+    second frees its capital fifty times over. The comparison here is profit per
+    dollar-year of capital committed.
+    """
+    probability = forecasts.get("Market-anchored linear")
+    if probability is None or probability.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for rule in config["risk"]["exit_rules"]:
+        settings = replace(
+            base_config,
+            exit_edge_fraction=rule["exit_edge_fraction"],
+            stop_loss_move=rule["stop_loss_move"],
+        )
+        result = run_backtest(frame, probability, settings)
+        reasons = (
+            result.trades["exit_reason"].value_counts().to_dict()
+            if not result.trades.empty
+            else {}
+        )
+        rows.append(
+            {
+                "exit_rule": rule["name"],
+                **result.summary,
+                "n_settlement": float(reasons.get("settlement", 0)),
+                "n_convergence": float(reasons.get("convergence", 0)),
+                "n_stop_loss": float(reasons.get("stop_loss", 0)),
+            }
+        )
+        print(
+            f"  {rule['name']:32s} trades={result.summary['n_trades']:4.0f} "
+            f"hold={result.summary['mean_holding_days']:5.1f}d "
+            f"per-capital-year={result.summary['roi_per_capital_year']:+.3f}"
+        )
+    return pd.DataFrame(rows)
 
 
 def _market_making_study(
@@ -396,6 +449,7 @@ def _write_report(
     ceiling: float,
     folds: pd.DataFrame,
     making: dict[str, pd.DataFrame],
+    velocity: pd.DataFrame,
 ) -> Path:
     """Write the research narrative, tables, and the caveats they depend on."""
     median_price = float(price.median())
@@ -534,6 +588,48 @@ def _write_report(
             f"{_fmt(row.get('edge_mean_predicted_edge'), '+.4f')} | "
             f"{_fmt(row.get('edge_mean_realized_edge'), '+.4f')} |"
         )
+
+    if not velocity.empty:
+        lines += [
+            "",
+            "## Capital velocity",
+            "",
+            "A position held to settlement earns nothing once its price has "
+            "converged to the forecast, while its capital stays unavailable to "
+            "every other opportunity. Exiting early gives up the tail of the edge "
+            "and pays the spread a second time, so whether it is worth doing "
+            "cannot be read off ROI per trade -- that metric scores a six-month "
+            "hold and a one-week turn identically.",
+            "",
+            "The column that decides it is **profit per capital-year**: dollars "
+            "earned per dollar-year of capital actually committed.",
+            "",
+            "| Exit rule | Trades | Mean hold (days) | ROI per trade | Capital-years | Profit per capital-year | Total profit |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+        for row in velocity.to_dict(orient="records"):
+            lines.append(
+                f"| {row['exit_rule']} | {row['n_trades']:.0f} | "
+                f"{_fmt(row['mean_holding_days'], '.1f')} | "
+                f"{_fmt(row['roi_on_capital'], '+.4f')} | "
+                f"{_fmt(row['capital_years'], ',.0f')} | "
+                f"{_fmt(row['roi_per_capital_year'], '+.3f')} | "
+                f"{row['total_profit']:+,.0f} |"
+            )
+        lines += [
+            "",
+            "Exit reasons: "
+            + "; ".join(
+                f"{row['exit_rule']} — {row['n_settlement']:.0f} settled, "
+                f"{row['n_convergence']:.0f} converged, {row['n_stop_loss']:.0f} stopped"
+                for row in velocity.to_dict(orient="records")
+            )
+            + ".",
+            "",
+            "A rule that raises profit per capital-year while lowering ROI per "
+            "trade is doing exactly what it should. One that raises both is "
+            "suspicious: early exit cannot manufacture edge, only recycle it.",
+        ]
 
     lines += [
         "",

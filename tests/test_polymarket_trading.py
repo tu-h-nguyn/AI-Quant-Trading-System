@@ -177,6 +177,126 @@ def test_summary_reports_bankroll_and_forecast_diagnostics():
     assert len(result.equity) == len(result.trades) + 1
 
 
+def _two_step_panel(prices, label=1, days=(0, 5), horizon=60):
+    """One market observed twice, so an exit rule has a later price to act on."""
+    return pd.DataFrame(
+        [
+            {
+                "market_id": "m",
+                "question": "q",
+                "timestamp": pd.Timestamp(NOW) + pd.Timedelta(days=day),
+                "price": price,
+                "yes_ask": price + 0.01,
+                "no_ask": (1 - price) + 0.01,
+                "end_date": pd.Timestamp(NOW) + pd.Timedelta(days=horizon),
+                "label": label,
+            }
+            for day, price in zip(days, prices)
+        ]
+    )
+
+
+def test_exit_rules_are_off_by_default():
+    panel = _two_step_panel([0.40, 0.88])
+    result = run_backtest(panel, pd.Series(0.9, index=panel.index), _config())
+    assert set(result.trades["exit_reason"]) == {"settlement"}
+    assert result.trades.iloc[0]["holding_days"] == pytest.approx(60.0)
+
+
+def test_a_converged_position_is_closed_before_settlement():
+    # Bought at 0.40 against a 0.90 forecast; once the price reaches 0.88 there
+    # is almost no edge left to wait for.
+    panel = _two_step_panel([0.40, 0.88])
+    settings = _config(exit_edge_fraction=0.25)
+    result = run_backtest(panel, pd.Series(0.9, index=panel.index), settings)
+    trade = result.trades.iloc[0]
+    assert trade["exit_reason"] == "convergence"
+    assert trade["holding_days"] == pytest.approx(5.0)
+    assert trade["profit"] > 0
+
+
+def test_a_position_still_carrying_edge_is_held():
+    panel = _two_step_panel([0.40, 0.45])
+    settings = _config(exit_edge_fraction=0.25)
+    result = run_backtest(panel, pd.Series(0.9, index=panel.index), settings)
+    assert result.trades.iloc[0]["exit_reason"] == "settlement"
+
+
+def test_exiting_pays_the_spread_a_second_time():
+    panel = _two_step_panel([0.40, 0.88])
+    wide = run_backtest(
+        panel, pd.Series(0.9, index=panel.index),
+        _config(exit_edge_fraction=0.25, default_spread=0.10),
+    )
+    narrow = run_backtest(
+        panel, pd.Series(0.9, index=panel.index),
+        _config(exit_edge_fraction=0.25, default_spread=0.02),
+    )
+    assert wide.trades.iloc[0]["payoff"] < narrow.trades.iloc[0]["payoff"]
+
+
+def test_a_stop_cuts_a_losing_position_before_settlement():
+    panel = _two_step_panel([0.40, 0.15], label=0)
+    held = run_backtest(panel, pd.Series(0.9, index=panel.index), _config())
+    stopped = run_backtest(
+        panel, pd.Series(0.9, index=panel.index), _config(stop_loss_move=0.15)
+    )
+    assert held.trades.iloc[0]["exit_reason"] == "settlement"
+    assert stopped.trades.iloc[0]["exit_reason"] == "stop_loss"
+    # Settlement at zero loses the whole stake; the stop recovers part of it.
+    assert stopped.trades.iloc[0]["profit"] > held.trades.iloc[0]["profit"]
+
+
+def test_a_stop_can_cut_a_position_that_would_have_won():
+    panel = _two_step_panel([0.40, 0.15], label=1)
+    stopped = run_backtest(
+        panel, pd.Series(0.9, index=panel.index), _config(stop_loss_move=0.15)
+    )
+    held = run_backtest(panel, pd.Series(0.9, index=panel.index), _config())
+    assert stopped.trades.iloc[0]["profit"] < held.trades.iloc[0]["profit"]
+
+
+def test_an_exit_releases_capital_for_another_market():
+    early = _two_step_panel([0.40, 0.88]).assign(market_id="early")
+    late = pd.DataFrame(
+        [
+            {
+                "market_id": "late", "question": "q",
+                "timestamp": pd.Timestamp(NOW) + pd.Timedelta(days=10), "price": 0.40,
+                "yes_ask": 0.41, "no_ask": 0.61,
+                "end_date": pd.Timestamp(NOW) + pd.Timedelta(days=60), "label": 1,
+            }
+        ]
+    )
+    panel = pd.concat([early, late], ignore_index=True)
+    probability = pd.Series(0.9, index=panel.index)
+    settings = _config(max_total_exposure=0.05, max_fraction=0.05)
+    held = run_backtest(panel, probability, settings)
+    exited = run_backtest(panel, probability, replace(settings, exit_edge_fraction=0.25))
+    # Holding "early" to day 60 blocks the whole budget; exiting on day 5 frees it.
+    assert set(held.trades["market_id"]) == {"early"}
+    assert set(exited.trades["market_id"]) == {"early", "late"}
+
+
+def test_capital_years_charge_for_the_time_money_is_committed():
+    panel = _two_step_panel([0.40, 0.88])
+    held = run_backtest(panel, pd.Series(0.9, index=panel.index), _config())
+    exited = run_backtest(
+        panel, pd.Series(0.9, index=panel.index), _config(exit_edge_fraction=0.25)
+    )
+    assert exited.summary["capital_years"] < held.summary["capital_years"]
+    # A shorter hold gives up edge per trade but earns it far faster.
+    assert exited.summary["roi_on_capital"] < held.summary["roi_on_capital"]
+    assert exited.summary["roi_per_capital_year"] > held.summary["roi_per_capital_year"]
+
+
+def test_exit_configuration_is_validated():
+    with pytest.raises(ValueError):
+        _config(exit_edge_fraction=1.5)
+    with pytest.raises(ValueError):
+        _config(stop_loss_move=0.0)
+
+
 def _live_markets():
     fixture = simulate_arbitrage_snapshot(seed=7)
     markets = [replace(m, end_date=NOW + timedelta(days=30)) for m in fixture.markets]

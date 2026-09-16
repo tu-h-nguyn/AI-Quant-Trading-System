@@ -60,6 +60,23 @@ An edge gate accepts trades only in a narrow band of predicted edge, which leave
 | Market-anchored linear | -12.581 | 8.841 | -1.42 | 0.0460 | +0.0482 | +0.1376 |
 | Market-anchored boosted | -1.273 | 6.529 | -0.19 | 0.0007 | +0.0531 | +0.0577 |
 
+## Capital velocity
+
+A position held to settlement earns nothing once its price has converged to the forecast, while its capital stays unavailable to every other opportunity. Exiting early gives up the tail of the edge and pays the spread a second time, so whether it is worth doing cannot be read off ROI per trade -- that metric scores a six-month hold and a one-week turn identically.
+
+The column that decides it is **profit per capital-year**: dollars earned per dollar-year of capital actually committed.
+
+| Exit rule | Trades | Mean hold (days) | ROI per trade | Capital-years | Profit per capital-year | Total profit |
+|---|---:|---:|---:|---:|---:|---:|
+| Hold to settlement | 44 | 30.6 | +0.3282 | 559 | +3.888 | +2,174 |
+| Exit at 25% of edge remaining | 108 | 7.4 | +0.1488 | 372 | +7.492 | +2,784 |
+| Exit at 50% of edge remaining | 118 | 6.5 | +0.1447 | 358 | +8.160 | +2,924 |
+| Exit at 25%, 15c stop | 108 | 7.4 | +0.1488 | 372 | +7.492 | +2,784 |
+
+Exit reasons: Hold to settlement — 44 settled, 0 converged, 0 stopped; Exit at 25% of edge remaining — 19 settled, 89 converged, 0 stopped; Exit at 50% of edge remaining — 17 settled, 101 converged, 0 stopped; Exit at 25%, 15c stop — 19 settled, 89 converged, 0 stopped.
+
+A rule that raises profit per capital-year while lowering ROI per trade is doing exactly what it should. One that raises both is suspicious: early exit cannot manufacture edge, only recycle it.
+
 ## Market making
 
 A taker pays the spread; a maker is paid it. On a venue quoting a few cents against a one-dollar payoff that is frequently larger than any forecast edge available, so it is the other half of the profitability question -- and it fails for a different reason.
