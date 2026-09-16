@@ -1,16 +1,41 @@
+from __future__ import annotations
+
 from pathlib import Path
-import sys
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"src"))
+
+from quant_system.backtest.engine import backtest
 from quant_system.config import load_config
 from quant_system.data.loader import load_symbol_data
-from quant_system.models.features import build_feature_frame
-from quant_system.models.train import train_logistic
-from quant_system.models.predict import probability_to_signal
-from quant_system.backtest.engine import backtest
+from quant_system.features.core import build_feature_frame
+from quant_system.models.core import probability_to_signal, train_logistic
 
-def main():
- c=load_config("configs/default.yaml"); d=c["data"]; f=c["features"]; m=c["model"]; df=load_symbol_data(d["symbols"][0])
- X,y,cols=build_feature_frame(df,f["return_windows"],f["volatility_windows"],f["moving_average_fast"],f["moving_average_slow"],m["horizon"])
- model,pred,labels,metrics=train_logistic(X,y,m["test_size"],m["random_state"]); print("ML:",metrics)
- sig=probability_to_signal(pred,m["threshold"]); r=backtest(df.loc[pred.index],sig,c["backtest"]["transaction_cost_bps"],c["backtest"]["initial_capital"]); print("Backtest:",r.metrics); print("Features:",cols)
-if __name__=="__main__": main()
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def main() -> None:
+    config = load_config(ROOT / "configs" / "default.yaml")
+    data_cfg, feature_cfg, model_cfg = config["data"], config["features"], config["model"]
+    frame = load_symbol_data(data_cfg["symbols"][0], ROOT / "data" / "raw")
+    X, y, columns = build_feature_frame(
+        frame,
+        feature_cfg["return_windows"],
+        feature_cfg["volatility_windows"],
+        feature_cfg["moving_average_fast"],
+        feature_cfg["moving_average_slow"],
+        model_cfg["horizon"],
+    )
+    model, probability, _, model_metrics = train_logistic(
+        X, y, model_cfg["test_size"], model_cfg["random_state"]
+    )
+    result = backtest(
+        frame.loc[probability.index],
+        probability_to_signal(probability, model_cfg["threshold"]),
+        config["backtest"]["transaction_cost_bps"],
+        config["backtest"]["initial_capital"],
+    )
+    print("ML:", model_metrics)
+    print("Backtest:", result.metrics)
+    print("Features:", columns)
+
+
+if __name__ == "__main__":
+    main()
