@@ -1,0 +1,18 @@
+data:
+  symbols: ["SPY"]
+  start: "2015-01-01"
+  end: null
+  interval: "1d"
+backtest:
+  transaction_cost_bps: 5
+  initial_capital: 100000
+features:
+  return_windows: [1, 5, 20]
+  volatility_windows: [5, 20]
+  moving_average_fast: 20
+  moving_average_slow: 50
+model:
+  horizon: 5
+  test_size: 0.2
+  threshold: 0.5
+  random_state: 42
