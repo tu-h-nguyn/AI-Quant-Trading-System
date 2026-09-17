@@ -81,6 +81,14 @@
     },
     "risk": {
       "bankroll": 10000.0,
+      "cluster_exposure_sweep": [
+        1.0,
+        0.08,
+        0.05,
+        0.03,
+        0.02
+      ],
+      "concentration_p_value": 0.01,
       "drawdown_floor": 0.25,
       "exit_rules": [
         {
@@ -105,6 +113,7 @@
         }
       ],
       "kelly_multiplier": 0.25,
+      "max_cluster_exposure": 0.08,
       "max_days_to_resolution": 365.0,
       "max_drawdown": 0.25,
       "max_fraction_per_market": 0.02,
@@ -133,10 +142,12 @@
       "mispricing_decay": 0.5,
       "mispricing_sigma": 0.35,
       "n_markets": 2500,
+      "n_themes": 8,
       "observations_per_market": 16,
       "seed": 42,
       "signal_strength": 0.75,
-      "spread": 0.02
+      "spread": 0.02,
+      "theme_strength": 0.7
     }
   },
   "experiment": "polymarket_oos_study",
@@ -146,7 +157,7 @@
     "results_csv": "reports/polymarket_results.csv"
   },
   "metrics": {
-    "achievable_brier_skill": 0.009909435270983757,
+    "achievable_brier_skill": 0.023433648911487914,
     "arbitrage_detected": 11,
     "arbitrage_planted": 11,
     "n_folds": 35,
@@ -155,5 +166,5 @@
     "n_strategies": 6,
     "panel_source": "simulation"
   },
-  "timestamp_utc": "2026-09-16T14:16:31.382110+00:00"
+  "timestamp_utc": "2026-09-17T11:36:59.998863+00:00"
 }

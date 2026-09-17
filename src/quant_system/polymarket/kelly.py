@@ -151,20 +151,46 @@ def size_position(
 def allocate_exposure(
     fractions: Mapping[str, float] | Sequence[tuple[str, float]],
     max_total_exposure: float = 0.20,
+    clusters: Mapping[str, str] | None = None,
+    max_cluster_exposure: float | None = None,
 ) -> dict[str, float]:
-    """Scale simultaneous stakes down to an aggregate exposure budget.
+    """Scale simultaneous stakes down to cluster and aggregate exposure budgets.
 
     Kelly is derived one bet at a time. Summing independently sized positions
     across dozens of live markets silently levers the bankroll, so the requested
     fractions are rescaled proportionally whenever they breach the budget.
-    Correlated markets are *not* detected here -- see
-    :func:`quant_system.polymarket.execution.deduplicate_by_event`.
+
+    An aggregate cap alone is not enough when the markets move together. Twenty
+    positions at two percent under a twenty-percent total looks diversified and
+    can be one twenty-percent wager, which is far above Kelly for the single bet
+    it amounts to. Passing ``clusters`` (from
+    :func:`quant_system.polymarket.correlation.cluster_markets`) with a
+    ``max_cluster_exposure`` caps each group of markets that lose together, so
+    the aggregate budget describes something real.
+
+    Clusters are trimmed first and the total second, which is the order that
+    terminates: scaling everything down preserves per-cluster compliance,
+    whereas trimming clusters after the total could push the sum back up.
     """
     if max_total_exposure <= 0:
         raise ValueError("max_total_exposure must be positive")
     items = dict(fractions)
     if any(value < 0 for value in items.values()):
         raise ValueError("fractions must be non-negative")
+
+    if clusters is not None and max_cluster_exposure is not None:
+        if max_cluster_exposure <= 0:
+            raise ValueError("max_cluster_exposure must be positive")
+        totals: dict[str, float] = {}
+        for key, value in items.items():
+            totals[clusters.get(key, key)] = totals.get(clusters.get(key, key), 0.0) + value
+        items = {
+            key: value * min(1.0, max_cluster_exposure / totals[clusters.get(key, key)])
+            if totals[clusters.get(key, key)] > 0
+            else value
+            for key, value in items.items()
+        }
+
     total = sum(items.values())
     if total <= max_total_exposure or total <= 0:
         return dict(items)

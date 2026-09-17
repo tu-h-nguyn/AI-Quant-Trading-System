@@ -334,6 +334,72 @@ def test_resolution_settings_are_validated():
         _config(resolution_recovery=-0.1)
 
 
+def _group_panel(n_markets=8, start=0, end=200):
+    return pd.DataFrame(
+        [
+            {
+                "market_id": f"g{start}m{i}", "question": "q",
+                "timestamp": pd.Timestamp(NOW) + pd.Timedelta(days=start + i),
+                "price": 0.40, "yes_ask": 0.41, "no_ask": 0.61,
+                "end_date": pd.Timestamp(NOW) + pd.Timedelta(days=end), "label": 1,
+            }
+            for i in range(n_markets)
+        ]
+    )
+
+
+def test_a_group_that_settles_together_shares_one_budget():
+    panel = _group_panel(n_markets=20)
+    settings = _config(max_total_exposure=0.40, max_fraction=0.05, max_cluster_exposure=0.08)
+    probability = pd.Series(0.9, index=panel.index)
+    groups = {market: "ONE" for market in panel["market_id"]}
+
+    loose = run_backtest(panel, probability, settings)
+    tight = run_backtest(panel, probability, settings, groups)
+    assert loose.trades["capital"].sum() > tight.trades["capital"].sum()
+    assert tight.summary["peak_group_exposure"] <= 0.08 + 1e-9
+
+
+def test_a_group_budget_is_released_as_its_positions_settle():
+    # A budget accumulated for the life of the run would retire a group the
+    # first time it was used and never let those markets trade again.
+    early = _group_panel(n_markets=8, start=0, end=30)
+    late = _group_panel(n_markets=8, start=60, end=120)
+    panel = pd.concat([early, late], ignore_index=True)
+    groups = {market: "ONE" for market in panel["market_id"]}
+    settings = _config(max_total_exposure=0.40, max_fraction=0.05, max_cluster_exposure=0.08)
+
+    result = run_backtest(panel, pd.Series(0.9, index=panel.index), settings, groups)
+    waves = {market[:2] for market in result.trades["market_id"]}
+    assert waves == {"g0", "g6"}
+    assert result.summary["peak_group_exposure"] <= 0.08 + 1e-9
+
+
+def test_a_cap_of_one_measures_without_constraining():
+    panel = _group_panel(n_markets=20)
+    groups = {market: "ONE" for market in panel["market_id"]}
+    settings = _config(max_total_exposure=0.40, max_fraction=0.05)
+    probability = pd.Series(0.9, index=panel.index)
+
+    ungrouped = run_backtest(panel, probability, settings)
+    measured = run_backtest(
+        panel, probability, replace(settings, max_cluster_exposure=1.0), groups
+    )
+    # Same book either way, but only the second knows how concentrated it was.
+    assert len(measured.trades) == len(ungrouped.trades)
+    assert measured.summary["peak_group_exposure"] > 0.0
+
+
+def test_diversified_markets_are_untouched_by_the_group_cap():
+    panel = _group_panel(n_markets=8)
+    groups = {market: market for market in panel["market_id"]}
+    settings = _config(max_total_exposure=0.40, max_fraction=0.05, max_cluster_exposure=0.08)
+    probability = pd.Series(0.9, index=panel.index)
+    assert len(run_backtest(panel, probability, settings, groups).trades) == len(
+        run_backtest(panel, probability, settings).trades
+    )
+
+
 def _live_markets():
     fixture = simulate_arbitrage_snapshot(seed=7)
     markets = [replace(m, end_date=NOW + timedelta(days=30)) for m in fixture.markets]

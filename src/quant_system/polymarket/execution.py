@@ -50,6 +50,9 @@ class RiskLimits:
     max_days_to_resolution: float = 365.0
     max_orders: int = 25
     one_order_per_event: bool = True
+    # Ceiling for any group of markets that move together. Without it the
+    # aggregate cap describes a diversification the book may not have.
+    max_cluster_exposure: float = 0.08
 
     def __post_init__(self) -> None:
         if self.min_days_to_resolution < 0 or self.max_days_to_resolution <= 0:
@@ -164,12 +167,18 @@ def build_order_plan(
     as_of: datetime | None = None,
     committed_capital: float = 0.0,
     available_cash: float | None = None,
+    clusters: Mapping[str, str] | None = None,
 ) -> OrderPlan:
     """Turn per-market forecasts into a risk-gated, exposure-capped order plan.
 
     ``probabilities`` maps ``market_id`` to the forecast probability that the
     market's YES outcome occurs. Markets absent from the mapping are skipped
     rather than traded at the market's own price.
+
+    ``clusters`` maps each market to the group of markets that move with it, so
+    the plan can cap what a correlated set takes together. Without it the plan
+    falls back to the venue's event ids, which catch only the markets the venue
+    already files together.
 
     ``committed_capital`` is what the account already has working in open
     positions. It matters because the aggregate exposure cap belongs to the
@@ -224,9 +233,14 @@ def build_order_plan(
     candidates.sort(key=lambda order: order.expected_profit, reverse=True)
     candidates = candidates[: rules.max_orders]
 
+    grouping = dict(clusters) if clusters else {
+        order.market_id: order.event_id or order.market_id for order in candidates
+    }
     scaled = allocate_exposure(
         {order.market_id: order.bankroll_fraction for order in candidates},
         max_total_exposure=remaining_exposure,
+        clusters=grouping,
+        max_cluster_exposure=rules.max_cluster_exposure,
     )
     funded = 0.0
     for order in candidates:

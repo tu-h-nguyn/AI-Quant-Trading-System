@@ -180,9 +180,9 @@ leakage impossible by construction and never uses a label before it was knowable
 
 **Read skill against the achievable ceiling.** Brier score on binary outcomes is
 dominated by the irreducible variance `q(1 - q)`, so an oracle holding the true
-probabilities scores only about `+0.010` against a roughly efficient price. A
-model at `+0.004` has captured nearly half of everything available, not "almost
-nothing". The study reports the ceiling alongside every skill score, and scores
+probabilities scores only about `+0.023` against a roughly efficient price. A
+model at `+0.017` has captured nearly three quarters of everything available,
+not "almost nothing". The study reports the ceiling alongside every skill score, and scores
 every entrant on one common out-of-sample window so the comparison is between
 strategies rather than between calendar periods.
 
@@ -209,14 +209,14 @@ break-even condition instead of a point estimate. On the synthetic panel:
 
 | Quoting around | Break-even uninformed fill rate |
 |---|---|
-| Market price | ~29% |
-| Market-anchored model forecast | profitable at every rate, including 0% |
+| Market price | ~39% |
+| Market-anchored model forecast | ~14% |
 
 That second row is the interesting one: quoting around a forecast roughly halves
-the adverse selection a maker pays, because the quote leans away from the moves
-that would otherwise run it over. A forecast edge is worth more to a maker than
-to a taker — the taker gets it only when the edge clears the spread, the maker
-collects the spread *and* the edge on every fill.
+the benign flow a maker needs to survive, because the quote leans away from the
+moves that would otherwise run it over. A forecast edge is worth more to a maker
+than to a taker — the taker gets it only when the edge clears the spread, the
+maker collects the spread *and* the edge on every fill.
 
 Inventory is capped and quotes are skewed against it, quotes widen inside a
 configurable window before resolution where flow is most informed, concurrency
@@ -225,6 +225,59 @@ and a short YES position is collateralized at a dollar a share because that is
 what settlement can demand. A fill the cash balance cannot fund is declined and
 counted, and the report flags a run where that happened rather than letting an
 under-capitalized book quietly understate both its losses and its gains.
+
+### Concentration
+
+Kelly is derived one wager at a time, so a book of independently sized positions
+under an aggregate cap is only as diversified as the positions are independent.
+"Fed cuts in March" and "Fed cuts in June" sit under different events, pass every
+per-market gate, and settle together. Twenty-five positions at 2% under a 20% cap
+can be one 20% wager wearing twenty-five names — an order of magnitude above
+Kelly for the single bet it is.
+
+**Which correlation matters depends on how the position ends.** A book held to
+settlement is exposed to joint *settlement*; a maker marked to market is exposed
+to joint *price paths*. Conflating them was the first thing tried here and it did
+not survive measurement:
+
+- clustering the synthetic panel on price co-movement put **120 of 120
+  independent markets** into multi-member clusters, largest 24;
+- on a panel with four planted themes, those clusters were **38% pure against
+  25% for chance**;
+- single linkage, a Bonferroni-corrected significance bar, and average linkage
+  all failed the same test.
+
+The cause is not the linkage rule. Every prediction market's quote drifts toward
+its own truth as it matures, so any two co-move whether or not their outcomes are
+related. Price correlation is real and is the wrong quantity for a settlement
+book — a test pins that so nobody wires it into sizing later.
+
+Settlement risk is measured where it is estimable instead. A single market
+settles once, so no pairwise outcome correlation can be estimated from it, but a
+*candidate grouping* can be tested across many groups at once: do markets inside
+a group agree with each other more often than markets across groups?
+
+| Grouping | Implied outcome correlation | Permutation p |
+|---|---:|---:|
+| The venue's own grouping | +0.18 | 0.000 |
+| Same group sizes, membership shuffled | +0.00 | 0.796 |
+| Clusters from price co-movement | +0.01 | 0.474 |
+
+Only a grouping that passes is sized against. The per-group exposure cap is then
+swept rather than assumed, because whether it binds depends on how many markets
+in one group clear the edge gate at once:
+
+| Group cap | Positions | Effective bets | Peak exposure to one group |
+|---:|---:|---:|---:|
+| none | 49 | 37.0 | 6.6% |
+| 5% | 56 | 40.5 | 5.0% |
+| 3% | 78 | 55.4 | 3.0% |
+
+A position count is not a bet count. One consequence carries into every other
+table in the report: when outcomes are correlated, the effective sample behind
+any performance estimate is nearer the group count than the observation count,
+so the bootstrap intervals quoted elsewhere — which resample trades, not groups —
+are narrower than the truth.
 
 ### Resolution risk
 
@@ -284,13 +337,13 @@ panel:
 
 | Exit rule | Mean hold | ROI per trade | Profit per capital-year |
 |---|---:|---:|---:|
-| Hold to settlement | 30.6 days | +0.33 | +3.89 |
-| Exit at 25% of edge remaining | 7.4 days | +0.15 | +7.49 |
-| Exit at 50% of edge remaining | 6.5 days | +0.14 | +8.16 |
+| Hold to settlement | 29.0 days | +0.42 | +5.49 |
+| Exit at 25% of edge remaining | 9.3 days | +0.32 | +12.42 |
+| Exit at 50% of edge remaining | 8.3 days | +0.23 | +10.14 |
 
-Per-trade ROI halves and return per capital-year doubles. A rule that raises
-both would be suspicious — early exit can only recycle edge, never create it.
-Exit rules are off by default so hold-to-settlement stays the baseline.
+Per-trade ROI falls and return per capital-year roughly doubles. A rule that
+raised both would be suspicious — early exit can only recycle edge, never create
+it. Exit rules are off by default so hold-to-settlement stays the baseline.
 
 ```bash
 python scripts/run_polymarket_study.py      # flagship study → reports/polymarket_research_report.md
@@ -399,6 +452,7 @@ src/quant_system/
     features.py                leakage-safe snapshot feature engineering
     model.py                   market-anchored and calibrated estimators
     validation.py              resolution-aware out-of-sample splitting
+    correlation.py             settlement vs price co-movement, concentration
     backtest.py                event-driven simulation with 0/1 settlement
     market_making.py           two-sided quoting, inventory, adverse selection
     metrics.py                 skill-vs-price and bankroll diagnostics

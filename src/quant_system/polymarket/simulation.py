@@ -44,6 +44,14 @@ class PanelSpec:
     # rate is not verifiable from this package, so it defaults to off; turn it on
     # to stress the validation guard against a panel that exhibits it.
     late_observation_fraction: float = 0.0
+    # Markets sharing a latent theme move together the way "Fed cuts in March"
+    # and "Fed cuts in June" do -- in their *outcomes* as well as their prices.
+    # The outcome part is what a book held to settlement is exposed to; a theme
+    # that only moved prices would be a mark-to-market concern and no more.
+    # Zero leaves every market independent, which is the easy world, not the
+    # real one.
+    n_themes: int = 0
+    theme_strength: float = 0.0
     seed: int = 42
 
     def __post_init__(self) -> None:
@@ -55,6 +63,10 @@ class PanelSpec:
             raise ValueError("mispricing_decay must lie in [0, 1]")
         if not 0.0 <= self.late_observation_fraction <= 1.0:
             raise ValueError("late_observation_fraction must lie in [0, 1]")
+        if self.n_themes < 0:
+            raise ValueError("n_themes must be non-negative")
+        if not 0.0 <= self.theme_strength < 1.0:
+            raise ValueError("theme_strength is a copula correlation in [0, 1)")
 
 
 def simulate_panel(spec: PanelSpec | None = None) -> pd.DataFrame:
@@ -71,7 +83,35 @@ def simulate_panel(spec: PanelSpec | None = None) -> pd.DataFrame:
     start = pd.Timestamp("2024-01-01", tz="UTC")
 
     latent = rng.beta(2.0, 2.0, size=settings.n_markets)
-    labels = (rng.uniform(size=settings.n_markets) < latent).astype(int)
+
+    # Theme effects come from their own generator and theme membership is
+    # deterministic, so turning themes off draws nothing from the main stream
+    # and leaves the default world byte-identical.
+    theme_path = None
+    themed = settings.n_themes > 0 and settings.theme_strength > 0
+    if themed:
+        theme_rng = np.random.default_rng(settings.seed + 1_000)
+        horizon = 200 + settings.horizon_days
+        theme_path = theme_rng.normal(0.0, 1.0, size=(settings.n_themes, horizon))
+
+    # The main stream always consumes its draw, so an unthemed and a themed run
+    # differ in their labels and in nothing else.
+    uniform = rng.uniform(size=settings.n_markets)
+    if themed:
+        # A Gaussian copula: a shared theme factor correlates the outcomes while
+        # leaving each market's marginal P(label = 1) exactly at its own q.
+        # Shifting q instead would correlate outcomes by making the world more
+        # predictable, which flatters every forecast in the study rather than
+        # testing the portfolio risk it is meant to create.
+        rho = float(np.clip(settings.theme_strength, 0.0, 0.99))
+        shared = theme_rng.normal(0.0, 1.0, size=settings.n_themes)
+        idiosyncratic = theme_rng.normal(0.0, 1.0, size=settings.n_markets)
+        latent_normal = (
+            rho * shared[np.arange(settings.n_markets) % settings.n_themes]
+            + np.sqrt(1.0 - rho**2) * idiosyncratic
+        )
+        uniform = _standard_normal_cdf(latent_normal)
+    labels = (uniform < latent).astype(int)
     offsets = rng.integers(0, 120, size=settings.n_markets)
 
     rows: list[dict] = []
@@ -100,6 +140,15 @@ def simulate_panel(spec: PanelSpec | None = None) -> pd.DataFrame:
             decay = 1.0 - settings.mispricing_decay * progress
 
             distortion = rng.normal(0.0, settings.mispricing_sigma) * decay
+            if theme_path is not None:
+                # Indexed by calendar day, not by observation number, so markets
+                # that start at different times still co-move while both are open.
+                day = int((timestamp - start).days)
+                distortion += (
+                    settings.theme_strength
+                    * settings.mispricing_sigma
+                    * theme_path[market % settings.n_themes, day]
+                )
             # The observable signal reveals `signal_strength` of the distortion;
             # a positive signal means the quote sits below the true probability.
             signal = -settings.signal_strength * distortion + rng.normal(
@@ -127,6 +176,7 @@ def simulate_panel(spec: PanelSpec | None = None) -> pd.DataFrame:
                     "end_date": end_date,
                     "signal": float(signal),
                     "true_probability": q,
+                    "group": f"THEME-{market % settings.n_themes}" if themed else f"SIM-{market:05d}",
                     "label": int(labels[market]),
                 }
             )
@@ -262,6 +312,13 @@ def simulate_arbitrage_snapshot(
         groups=groups,
         planted={key: tuple(value) for key, value in planted.items()},
     )
+
+
+def _standard_normal_cdf(values: np.ndarray) -> np.ndarray:
+    """Normal CDF via the error function, so a copula needs no SciPy import."""
+    from math import erf
+
+    return np.array([0.5 * (1.0 + erf(float(v) / np.sqrt(2.0))) for v in values])
 
 
 def _quote(

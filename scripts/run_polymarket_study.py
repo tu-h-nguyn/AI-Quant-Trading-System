@@ -35,6 +35,11 @@ from quant_system.evaluation.robustness import block_bootstrap_mean, percentile_
 from quant_system.polymarket.arbitrage import opportunities_frame, scan_markets
 from dataclasses import replace
 
+from quant_system.polymarket.correlation import (
+    block_correlation,
+    concentration_report,
+    outcome_concordance,
+)
 from quant_system.polymarket.backtest import (
     TradeConfig,
     run_backtest,
@@ -79,6 +84,8 @@ def load_panel(config: dict, force_simulation: bool = False) -> tuple[pd.DataFra
         signal_strength=float(simulation_cfg["signal_strength"]),
         mispricing_decay=float(simulation_cfg["mispricing_decay"]),
         spread=float(simulation_cfg["spread"]),
+        n_themes=int(simulation_cfg.get("n_themes", 0)),
+        theme_strength=float(simulation_cfg.get("theme_strength", 0.0)),
         seed=int(simulation_cfg["seed"]),
     )
     return simulate_panel(spec), "simulation"
@@ -298,6 +305,7 @@ def main() -> None:
 
     results = pd.DataFrame(rows)
     velocity = _capital_velocity_study(config, frame.loc[X.index], forecasts, trade_config)
+    concentration = _concentration_study(config, frame.loc[X.index], forecasts, trade_config)
     resolution = _resolution_risk_study(config, frame.loc[X.index], forecasts, trade_config)
     making = _market_making_study(config, frame.loc[X.index], forecasts)
     report_dir = ROOT / "reports"
@@ -345,6 +353,7 @@ def main() -> None:
         making=making,
         velocity=velocity,
         resolution=resolution,
+        concentration=concentration,
     )
 
     record = save_experiment(
@@ -416,6 +425,84 @@ def _capital_velocity_study(
             f"per-capital-year={result.summary['roi_per_capital_year']:+.3f}"
         )
     return pd.DataFrame(rows)
+
+
+def _concentration_study(
+    config: dict,
+    frame: pd.DataFrame,
+    forecasts: dict[str, pd.Series],
+    trade_config: TradeConfig,
+) -> dict:
+    """Ask whether the book's positions are as many bets as they are positions.
+
+    The grouping is tested before it is trusted. A grouping that does not predict
+    joint settlement on history would, if sized against, cut positions to control
+    a concentration that is not there -- so the test runs first and the exposure
+    figures are only computed from a correlation the data supports.
+    """
+    probability = forecasts.get("Market-anchored linear")
+    if probability is None or probability.empty or "group" not in frame.columns:
+        return {}
+
+    settled = frame.groupby("market_id").agg(label=("label", "first"), group=("group", "first"))
+    validation = outcome_concordance(
+        settled["label"], settled["group"], seed=int(config["model"]["random_state"])
+    )
+    trusted = bool(validation["p_value"] < float(config["risk"].get("concentration_p_value", 0.01)))
+
+    rho = validation["implied_within_correlation"] if trusted else 0.0
+    grouping = settled["group"].to_dict()
+
+    # The comparison that decides anything: the same forecast with the cluster
+    # cap off and on. Reporting only the uncapped book would describe a
+    # concentration the live path already prevents.
+    # The cap is swept rather than asserted: whether it binds depends on how many
+    # markets in one group happen to clear the edge gate at the same time, which
+    # is a property of the universe and not something a default can know.
+    rows = []
+    for limit in config["risk"].get("cluster_exposure_sweep", [1.0]):
+        result = run_backtest(
+            frame, probability, replace(trade_config, max_cluster_exposure=float(limit)), grouping
+        )
+        if result.trades.empty:
+            continue
+        exposures = result.trades.groupby("market_id")["capital"].sum() / trade_config.bankroll
+        sides = result.trades.groupby("market_id")["side"].first().to_dict()
+        member = {market: grouping.get(market, market) for market in exposures.index}
+        matrix = block_correlation(pd.Series(member), rho)
+        rows.append(
+            {
+                "max_cluster_exposure": float(limit),
+                **concentration_report(exposures, matrix, member, sides),
+                "peak_group_exposure": float(
+                    result.summary.get("peak_group_exposure", float("nan"))
+                ),
+                "total_profit": float(result.summary["total_profit"]),
+                "roi_per_capital_year": float(result.summary["roi_per_capital_year"]),
+            }
+        )
+    if not rows:
+        return {"validation": validation, "trusted": trusted}
+
+    sweep = pd.DataFrame(rows).sort_values("max_cluster_exposure", ascending=False)
+    print(
+        f"  grouping {'predicts' if trusted else 'does NOT predict'} joint settlement "
+        f"(rho {validation['implied_within_correlation']:+.3f}, p={validation['p_value']:.3f})"
+    )
+    for row in sweep.to_dict(orient="records"):
+        # The cap bound if the book ran right up against it; a peak comfortably
+        # below means the per-market limit was already holding the group under.
+        state = (
+            "binds"
+            if row["peak_group_exposure"] >= row["max_cluster_exposure"] - 1e-9
+            else "dormant"
+        )
+        print(
+            f"    cap {row['max_cluster_exposure']:>5.0%}: {row['n_positions']:>3.0f} positions = "
+            f"{row['effective_independent_bets']:>5.1f} bets, peak group "
+            f"{row['peak_group_exposure']:>5.1%}, profit {row['total_profit']:>+9,.0f} ({state})"
+        )
+    return {"validation": validation, "trusted": trusted, "sweep": sweep}
 
 
 def _resolution_risk_study(
@@ -514,6 +601,7 @@ def _write_report(
     making: dict[str, pd.DataFrame],
     velocity: pd.DataFrame,
     resolution: pd.DataFrame,
+    concentration: dict,
 ) -> Path:
     """Write the research narrative, tables, and the caveats they depend on."""
     median_price = float(price.median())
@@ -694,6 +782,89 @@ def _write_report(
             "trade is doing exactly what it should. One that raises both is "
             "suspicious: early exit cannot manufacture edge, only recycle it.",
         ]
+
+    if concentration.get("validation"):
+        validation = concentration["validation"]
+        lines += [
+            "",
+            "## Concentration",
+            "",
+            "Kelly is derived one wager at a time, so a book of independently "
+            "sized positions under an aggregate cap is only as diversified as the "
+            "positions are independent. Markets that settle together are one bet "
+            "wearing several names, and the aggregate cap then describes a "
+            "diversification the book does not have.",
+            "",
+            "**Which correlation matters depends on how the position ends.** A "
+            "book held to settlement is exposed to joint settlement; a maker "
+            "marked to market is exposed to joint price paths. Clustering this "
+            "panel on price co-movement put 120 of 120 *independent* markets into "
+            "multi-member clusters and produced groups 38% pure against 25% for "
+            "chance -- every market's quote drifts toward its own truth as it "
+            "matures, so any two co-move whether or not their outcomes are "
+            "related. Settlement risk is therefore measured directly, by asking "
+            "whether markets inside a candidate group agree with each other more "
+            "often than markets across groups.",
+            "",
+            "| Grouping test | Value |",
+            "|---|---:|",
+            f"| Markets tested | {validation['n_markets']:.0f} |",
+            f"| Groups | {validation['n_groups']:.0f} |",
+            f"| Agreement within a group | {validation['within_concordance']:.3f} |",
+            f"| Agreement across groups | {validation['cross_concordance']:.3f} |",
+            "| Implied within-group outcome correlation | "
+            f"{validation['implied_within_correlation']:+.3f} |",
+            f"| Permutation p-value | {validation['p_value']:.3f} |",
+            "",
+        ]
+        if concentration.get("sweep") is not None:
+            sweep = concentration["sweep"]
+            lines += [
+                f"The grouping **{'does' if concentration['trusted'] else 'does not'}** predict "
+                "joint settlement at the configured significance, so it "
+                f"{'is' if concentration['trusted'] else 'is not'} sized against. Every row "
+                "below is the same forecast and the same measured correlation; only the "
+                "per-group exposure cap differs.",
+                "",
+                "| Group cap | Positions | Effective bets | Peak exposure to one group | Profit | Profit per capital-year |",
+                "|---:|---:|---:|---:|---:|---:|",
+            ]
+            for row in sweep.to_dict(orient="records"):
+                lines.append(
+                    f"| {row['max_cluster_exposure']:.0%} | {row['n_positions']:.0f} | "
+                    f"{row['effective_independent_bets']:.1f} | "
+                    f"{row['peak_group_exposure']:.1%} | "
+                    f"{row['total_profit']:+,.0f} | {row['roi_per_capital_year']:+.2f} |"
+                )
+            bound = sweep[sweep["peak_group_exposure"] >= sweep["max_cluster_exposure"] - 1e-9]
+            lines += [
+                "",
+                "Read the peak-exposure column against the cap in the same row. Where the peak "
+                "sits at the cap, the cap bound and shaped the book; where it sits comfortably "
+                "below, the per-market limit was already holding the group under and the cap "
+                "did nothing."
+                + (
+                    f" Here it starts binding at {bound['max_cluster_exposure'].max():.0%}."
+                    if not bound.empty
+                    else " Here it never binds at any swept level."
+                ),
+                "",
+                "The profit column is not the thing to optimize against. These books hold "
+                "dozens of trades whose outcomes are correlated by construction, so the "
+                "differences between rows sit well inside the noise; the columns that carry "
+                "information are the position and effective-bet counts, which are structural.",
+                "",
+                "A position count is not a bet count, and the gap between them is what the cap "
+                "exists to close. Whether it needs to bind depends on how many markets in one "
+                "group clear the edge gate at once, which is a property of the universe rather "
+                "than something a default can know -- hence a sweep rather than a number.",
+                "",
+                "One consequence worth carrying into every other table in this report: when "
+                "outcomes are correlated, the effective sample behind any performance estimate "
+                "is nearer the group count than the observation count. The bootstrap intervals "
+                "quoted elsewhere resample trades, not groups, so they are narrower than the "
+                "truth.",
+            ]
 
     if not resolution.empty:
         baseline_trades = resolution["n_trades"].iloc[0]

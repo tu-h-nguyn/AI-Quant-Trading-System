@@ -14,7 +14,7 @@
 - Cold start: no forecast is produced before 2024-03-07, by which point 1400 observations from settled markets exist.
 - Frictions: 0.020 spread + 0.005 adverse selection + 0.0 bps fee, charged on entry.
 - Sizing: 0.25 x Kelly, capped at 2.0% per market and 20% aggregate, with forecasts shrunk 35% toward the market price.
-- Edge gate: 0.040. At the median price of 0.495 the break-even edge is 0.0150, so the gate is above the friction floor.
+- Edge gate: 0.040. At the median price of 0.494 the break-even edge is 0.0150, so the gate is above the friction floor.
 - Positions are held to settlement; committed capital is unavailable to later trades.
 - Baseline tilt: 0.0888, the smallest fixed mispricing claim that still clears the gate after shrinkage and frictions.
 - Passthrough features supplied by the caller: `signal`. These are trusted, not validated for look-ahead.
@@ -23,27 +23,27 @@
 
 Skill is measured against the market price, not against a coin flip. A positive Brier skill score means the forecast carries information the price does not.
 
-**The achievable skill here is +0.00991.** That is what an oracle holding the true probabilities would score against this price series. Brier score on binary outcomes is dominated by the irreducible variance `q(1 - q)`, so skill against a roughly efficient price is always a few thousandths even when the economic edge is large. Read every number below as a fraction of that ceiling, not against 1.0.
+**The achievable skill here is +0.02343.** That is what an oracle holding the true probabilities would score against this price series. Brier score on binary outcomes is dominated by the irreducible variance `q(1 - q)`, so skill against a roughly efficient price is always a few thousandths even when the economic edge is large. Read every number below as a fraction of that ceiling, not against 1.0.
 
 | Strategy | Observations | Brier | Market Brier | Brier skill vs market | % of ceiling | Calibration error |
 |---|---:|---:|---:|---:|---:|---:|
-| Market price | 17500 | 0.19888 | 0.19888 | +0.00000 | +0.0 | 0.0076 |
-| Favourite | 17500 | 0.20630 | 0.19888 | -0.03731 | -376.5 | 0.0862 |
-| Longshot | 17500 | 0.20689 | 0.19888 | -0.04029 | -406.6 | 0.0460 |
-| Logistic (unanchored) | 17500 | 0.20252 | 0.19888 | -0.01832 | -184.8 | 0.0175 |
-| Market-anchored linear | 17500 | 0.19799 | 0.19888 | +0.00443 | +44.7 | 0.0115 |
-| Market-anchored boosted | 17500 | 0.19848 | 0.19888 | +0.00198 | +19.9 | 0.0087 |
+| Market price | 17500 | 0.20286 | 0.20286 | +0.00000 | +0.0 | 0.0456 |
+| Favourite | 17500 | 0.21224 | 0.20286 | -0.04623 | -197.3 | 0.0963 |
+| Longshot | 17500 | 0.20907 | 0.20286 | -0.03060 | -130.6 | 0.0616 |
+| Logistic (unanchored) | 17500 | 0.20469 | 0.20286 | -0.00901 | -38.4 | 0.0293 |
+| Market-anchored linear | 17500 | 0.19938 | 0.20286 | +0.01720 | +73.4 | 0.0273 |
+| Market-anchored boosted | 17500 | 0.19868 | 0.20286 | +0.02064 | +88.1 | 0.0203 |
 
 ## Trading results after frictions
 
 | Strategy | Trades | ROI on capital | Total return | Hit rate | Max drawdown | Mean trade return | 95% CI |
 |---|---:|---:|---:|---:|---:|---:|---|
 | Market price | 0 | — | — | — | — | — | — |
-| Favourite | 48 | -0.1125 | -0.0727 | 0.6667 | -0.1323 | -0.0811 | [-0.2286, +0.0365] |
-| Longshot | 49 | -0.0157 | -0.0109 | 0.3061 | -0.1380 | -0.0556 | [-0.3806, +0.4793] |
-| Logistic (unanchored) | 49 | +0.3179 | +0.2433 | 0.6122 | -0.1162 | +0.4262 | [-0.0732, +0.8117] |
-| Market-anchored linear | 44 | +0.3282 | +0.2174 | 0.5909 | -0.0668 | +0.3548 | [+0.1132, +0.5521] |
-| Market-anchored boosted | 55 | +0.0432 | +0.0339 | 0.5455 | -0.1188 | +0.0399 | [-0.2400, +0.3451] |
+| Favourite | 45 | +0.0165 | +0.0105 | 0.7111 | -0.0529 | -0.0225 | [-0.1632, +0.1405] |
+| Longshot | 48 | -0.0279 | -0.0191 | 0.3333 | -0.1408 | -0.0486 | [-0.3954, +0.2438] |
+| Logistic (unanchored) | 47 | +0.2269 | +0.1784 | 0.5106 | -0.1136 | +0.2203 | [-0.3232, +0.7312] |
+| Market-anchored linear | 49 | +0.4214 | +0.3719 | 0.6122 | -0.0752 | +0.4386 | [-0.0121, +0.9298] |
+| Market-anchored boosted | 49 | +0.1543 | +0.1174 | 0.4898 | -0.0684 | +0.0994 | [-0.2838, +0.5484] |
 
 ## Edge realization
 
@@ -54,11 +54,11 @@ An edge gate accepts trades only in a narrow band of predicted edge, which leave
 | Strategy | Slope | Std error | t | R² | Mean predicted edge | Mean realized edge |
 |---|---:|---:|---:|---:|---:|---:|
 | Market price | — | — | — | — | — | — |
-| Favourite | -16.771 | 60.986 | -0.27 | 0.0016 | +0.0476 | -0.0474 |
-| Longshot | — | — | — | — | +0.0477 | -0.0160 |
-| Logistic (unanchored) | +0.535 | 2.244 | +0.24 | 0.0012 | +0.0685 | +0.1713 |
-| Market-anchored linear | -12.581 | 8.841 | -1.42 | 0.0460 | +0.0482 | +0.1376 |
-| Market-anchored boosted | -1.273 | 6.529 | -0.19 | 0.0007 | +0.0531 | +0.0577 |
+| Favourite | -37.819 | 177.765 | -0.21 | 0.0011 | +0.0477 | -0.0069 |
+| Longshot | — | — | — | — | +0.0477 | +0.0284 |
+| Logistic (unanchored) | +1.721 | 1.641 | +1.05 | 0.0239 | +0.0867 | +0.1028 |
+| Market-anchored linear | +4.171 | 1.672 | +2.49 | 0.1169 | +0.0743 | +0.1827 |
+| Market-anchored boosted | +2.891 | 2.644 | +1.09 | 0.0248 | +0.0675 | +0.0564 |
 
 ## Capital velocity
 
@@ -68,14 +68,47 @@ The column that decides it is **profit per capital-year**: dollars earned per do
 
 | Exit rule | Trades | Mean hold (days) | ROI per trade | Capital-years | Profit per capital-year | Total profit |
 |---|---:|---:|---:|---:|---:|---:|
-| Hold to settlement | 44 | 30.6 | +0.3282 | 559 | +3.888 | +2,174 |
-| Exit at 25% of edge remaining | 108 | 7.4 | +0.1488 | 372 | +7.492 | +2,784 |
-| Exit at 50% of edge remaining | 118 | 6.5 | +0.1447 | 358 | +8.160 | +2,924 |
-| Exit at 25%, 15c stop | 108 | 7.4 | +0.1488 | 372 | +7.492 | +2,784 |
+| Hold to settlement | 49 | 29.0 | +0.4214 | 677 | +5.490 | +3,719 |
+| Exit at 25% of edge remaining | 157 | 9.3 | +0.3239 | 742 | +12.420 | +9,218 |
+| Exit at 50% of edge remaining | 172 | 8.3 | +0.2276 | 763 | +10.139 | +7,737 |
+| Exit at 25%, 15c stop | 157 | 9.3 | +0.3239 | 742 | +12.420 | +9,218 |
 
-Exit reasons: Hold to settlement — 44 settled, 0 converged, 0 stopped; Exit at 25% of edge remaining — 19 settled, 89 converged, 0 stopped; Exit at 50% of edge remaining — 17 settled, 101 converged, 0 stopped; Exit at 25%, 15c stop — 19 settled, 89 converged, 0 stopped.
+Exit reasons: Hold to settlement — 49 settled, 0 converged, 0 stopped; Exit at 25% of edge remaining — 52 settled, 105 converged, 0 stopped; Exit at 50% of edge remaining — 45 settled, 127 converged, 0 stopped; Exit at 25%, 15c stop — 52 settled, 105 converged, 0 stopped.
 
 A rule that raises profit per capital-year while lowering ROI per trade is doing exactly what it should. One that raises both is suspicious: early exit cannot manufacture edge, only recycle it.
+
+## Concentration
+
+Kelly is derived one wager at a time, so a book of independently sized positions under an aggregate cap is only as diversified as the positions are independent. Markets that settle together are one bet wearing several names, and the aggregate cap then describes a diversification the book does not have.
+
+**Which correlation matters depends on how the position ends.** A book held to settlement is exposed to joint settlement; a maker marked to market is exposed to joint price paths. Clustering this panel on price co-movement put 120 of 120 *independent* markets into multi-member clusters and produced groups 38% pure against 25% for chance -- every market's quote drifts toward its own truth as it matures, so any two co-move whether or not their outcomes are related. Settlement risk is therefore measured directly, by asking whether markets inside a candidate group agree with each other more often than markets across groups.
+
+| Grouping test | Value |
+|---|---:|
+| Markets tested | 2500 |
+| Groups | 8 |
+| Agreement within a group | 0.582 |
+| Agreement across groups | 0.492 |
+| Implied within-group outcome correlation | +0.181 |
+| Permutation p-value | 0.000 |
+
+The grouping **does** predict joint settlement at the configured significance, so it is sized against. Every row below is the same forecast and the same measured correlation; only the per-group exposure cap differs.
+
+| Group cap | Positions | Effective bets | Peak exposure to one group | Profit | Profit per capital-year |
+|---:|---:|---:|---:|---:|---:|
+| 100% | 49 | 37.0 | 6.6% | +3,719 | +5.49 |
+| 8% | 49 | 37.0 | 6.6% | +3,719 | +5.49 |
+| 5% | 56 | 40.5 | 5.0% | +4,684 | +6.96 |
+| 3% | 78 | 55.4 | 3.0% | +3,563 | +5.79 |
+| 2% | 64 | 34.5 | 2.0% | +2,994 | +6.30 |
+
+Read the peak-exposure column against the cap in the same row. Where the peak sits at the cap, the cap bound and shaped the book; where it sits comfortably below, the per-market limit was already holding the group under and the cap did nothing. Here it starts binding at 5%.
+
+The profit column is not the thing to optimize against. These books hold dozens of trades whose outcomes are correlated by construction, so the differences between rows sit well inside the noise; the columns that carry information are the position and effective-bet counts, which are structural.
+
+A position count is not a bet count, and the gap between them is what the cap exists to close. Whether it needs to bind depends on how many markets in one group clear the edge gate at once, which is a property of the universe rather than something a default can know -- hence a sweep rather than a number.
+
+One consequence worth carrying into every other table in this report: when outcomes are correlated, the effective sample behind any performance estimate is nearer the group count than the observation count. The bootstrap intervals quoted elsewhere resample trades, not groups, so they are narrower than the truth.
 
 ## Resolution risk
 
@@ -99,13 +132,13 @@ Expensive contracts are the fragile ones. The same 4% edge tolerates several tim
 
 | Assumed resolution risk | Trades | Total profit | ROI per trade |
 |---:|---:|---:|---:|
-| 0% | 44 | +2,174 | +0.3282 |
-| 1% | 37 | +1,367 | +0.2234 |
-| 2% | 33 | +1,223 | +0.2344 |
-| 5% | 30 | +1,682 | +0.3664 |
-| 10% | 26 | +923 | +0.2164 |
+| 0% | 49 | +3,719 | +0.4214 |
+| 1% | 51 | +3,677 | +0.4420 |
+| 2% | 51 | +4,310 | +0.5194 |
+| 5% | 48 | +4,294 | +0.5408 |
+| 10% | 50 | +1,802 | +0.2454 |
 
-Read the trade count, not the P&L. The gate rejects more positions as the assumed risk rises -- from 44 trades at zero down the column -- and the profit figures at the bottom rest on a sample too small to carry a conclusion.
+Read the trade count, not the P&L. The gate rejects more positions as the assumed risk rises -- from 49 trades at zero down the column -- and the profit figures at the bottom rest on a sample too small to carry a conclusion.
 
 ## Market making
 
@@ -115,34 +148,34 @@ A resting quote is filled precisely when someone wants the other side, which is 
 
 ### Quoting around: Market price
 
-Break-even uninformed fill rate: **28.7%**. Below this share of benign flow the book loses money however tightly it quotes.
+Break-even uninformed fill rate: **38.7%**. Below this share of benign flow the book loses money however tightly it quotes.
 
 | Uninformed fill rate | Fills | P&L | Quoted spread | Adverse selection | Capture ratio | Peak capital |
 |---:|---:|---:|---:|---:|---:|---:|
-| 0% | 1013 | -1,845 | 2,025 | -3,870 | -0.911 | 4,900 |
-| 10% | 1190 | -1,189 | 2,376 | -3,565 | -0.500 | 5,100 |
-| 20% | 1367 | -231 | 2,728 | -2,959 | -0.085 | 5,600 |
-| 30% | 1551 | +34 | 3,094 | -3,060 | +0.011 | 6,000 |
-| 40% | 1722 | +451 | 3,436 | -2,985 | +0.131 | 7,000 |
-| 50% | 1912 | +1,911 | 3,815 | -1,903 | +0.501 | 6,800 |
-| 60% | 2093 | +3,482 | 4,179 | -697 | +0.833 | 5,600 |
-| 80% | 2464 | +4,564 | 4,922 | -359 | +0.927 | 5,700 |
-| 100% | 2848 | +5,690 | 5,690 | +0 | +1.000 | 0 |
+| 0% | 1132 | -4,230 | 2,262 | -6,492 | -1.870 | 7,200 |
+| 10% | 1307 | -3,358 | 2,611 | -5,968 | -1.286 | 7,100 |
+| 20% | 1475 | -1,563 | 2,945 | -4,507 | -0.531 | 7,000 |
+| 30% | 1638 | -1,289 | 3,269 | -4,557 | -0.394 | 7,800 |
+| 40% | 1793 | +199 | 3,577 | -3,378 | +0.056 | 7,700 |
+| 50% | 1976 | +802 | 3,942 | -3,141 | +0.203 | 7,100 |
+| 60% | 2148 | +1,940 | 4,289 | -2,350 | +0.452 | 6,300 |
+| 80% | 2482 | +2,916 | 4,958 | -2,041 | +0.588 | 5,400 |
+| 100% | 2848 | +5,688 | 5,688 | +0 | +1.000 | 0 |
 
 ### Quoting around: Market-anchored linear
 
-**Profitable across the entire swept range, including with no benign flow at all.** A maker that makes money on purely informed flow is being paid for its forecast, not for its spread.
+Break-even uninformed fill rate: **13.6%**. Below this share of benign flow the book loses money however tightly it quotes.
 
 | Uninformed fill rate | Fills | P&L | Quoted spread | Adverse selection | Capture ratio | Peak capital |
 |---:|---:|---:|---:|---:|---:|---:|
-| 0% | 958 | +72 | 1,915 | -1,843 | +0.038 | 7,400 |
-| 10% | 1136 | +386 | 2,270 | -1,884 | +0.170 | 7,700 |
-| 20% | 1323 | +781 | 2,642 | -1,860 | +0.296 | 6,800 |
-| 30% | 1508 | +1,128 | 3,010 | -1,882 | +0.375 | 6,400 |
-| 40% | 1691 | +1,180 | 3,375 | -2,196 | +0.350 | 7,000 |
-| 50% | 1896 | +2,396 | 3,785 | -1,388 | +0.633 | 7,400 |
-| 60% | 2080 | +3,564 | 4,155 | -591 | +0.858 | 6,000 |
-| 80% | 2451 | +4,409 | 4,898 | -490 | +0.900 | 5,700 |
+| 0% | 1108 | -1,356 | 2,214 | -3,571 | -0.613 | 9,500 |
+| 10% | 1275 | -498 | 2,548 | -3,047 | -0.196 | 9,100 |
+| 20% | 1452 | +899 | 2,899 | -2,000 | +0.310 | 8,200 |
+| 30% | 1623 | +859 | 3,241 | -2,382 | +0.265 | 7,800 |
+| 40% | 1793 | +2,241 | 3,581 | -1,340 | +0.626 | 7,700 |
+| 50% | 1978 | +2,693 | 3,950 | -1,258 | +0.682 | 7,100 |
+| 60% | 2144 | +3,133 | 4,284 | -1,151 | +0.731 | 6,600 |
+| 80% | 2483 | +3,507 | 4,963 | -1,456 | +0.707 | 5,400 |
 | 100% | 2848 | +5,692 | 5,692 | +0 | +1.000 | 0 |
 
 Capture ratio is realized P&L over the spread that was quoted. One means every quoted cent was kept; zero or below means the flow took back more than the spread paid. Adverse selection is roughly constant across the sweep because it depends on how often the price moves, not on how much benign flow arrives alongside it.

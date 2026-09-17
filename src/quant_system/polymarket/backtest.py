@@ -20,6 +20,7 @@ the caller is expected to have produced out of sample -- typically through
 from __future__ import annotations
 
 import zlib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -63,6 +64,10 @@ class TradeConfig:
     # a technicality, a dispute, a void. Applied twice: the forecast is
     # discounted for it before sizing, and the simulation realizes it at that
     # rate, so the assumption is both paid for and charged.
+    # Ceiling for any group of markets that settle together. Without it the
+    # aggregate cap describes a diversification the book may not have. Applied
+    # only when run_backtest is given a grouping.
+    max_cluster_exposure: float = 0.08
     resolution_risk: float = 0.0
     # Zero is the only value that keeps this a cost. A non-zero recovery pays a
     # cheap contract more than it cost, so the strategy would learn to buy
@@ -77,6 +82,8 @@ class TradeConfig:
             raise ValueError("default_spread and extra_slippage must be non-negative")
         if not 0.0 < self.max_total_exposure <= 1.0:
             raise ValueError("max_total_exposure must lie in (0, 1]")
+        if not 0.0 < self.max_cluster_exposure <= 1.0:
+            raise ValueError("max_cluster_exposure must lie in (0, 1]")
         if self.exit_edge_fraction is not None and not 0.0 <= self.exit_edge_fraction < 1.0:
             raise ValueError("exit_edge_fraction must lie in [0, 1)")
         if self.stop_loss_move is not None and not 0.0 < self.stop_loss_move <= 1.0:
@@ -116,12 +123,14 @@ class _OpenPosition:
     settle_time: pd.Timestamp
     label: int
     entry_market_price: float = float("nan")
+    group: str = ""
 
 
 def run_backtest(
     panel: pd.DataFrame,
     probabilities: pd.Series,
     config: TradeConfig | None = None,
+    groups: Mapping[str, str] | None = None,
 ) -> BacktestResult:
     """Simulate trading a probability forecast against a snapshot panel.
 
@@ -130,6 +139,16 @@ def run_backtest(
     ``probabilities`` is indexed by the same ``observation_id``. Rows without a
     forecast are simply not traded, which is how a walk-forward warm-up period
     is represented.
+
+    ``groups`` maps each market to the set of markets that settle with it. When
+    supplied, peak simultaneous exposure per group is measured, and no group may
+    hold more than ``max_cluster_exposure`` of the bankroll at once. Setting that
+    limit to 1.0 measures without constraining, which is how the same book is
+    scored with the cap off and on. Without it the aggregate cap alone can be one wager spread
+    across many names, which is far above Kelly for the single bet it is; the
+    grouping should be one that has been shown to predict joint settlement (see
+    :func:`quant_system.polymarket.correlation.outcome_concordance`) rather than
+    assumed.
     """
     settings = config or TradeConfig()
     missing = set(REQUIRED_PANEL_COLUMNS) - set(panel.columns)
@@ -156,6 +175,12 @@ def run_backtest(
     locked = 0.0
     open_positions: list[_OpenPosition] = []
     traded_markets: set[str] = set()
+    grouping = dict(groups) if groups else {}
+    # Capital open in each group right now, released as its positions settle.
+    # Accumulating it for the life of the run would retire a group's budget the
+    # first time it was used and never let that group trade again.
+    group_committed: dict[str, float] = {}
+    peak_group = 0.0
     settled: list[dict] = []
     equity_index: list[pd.Timestamp] = []
     equity_values: list[float] = []
@@ -166,7 +191,7 @@ def run_backtest(
         # the trade being considered at this same timestamp.
         bankroll, locked = _settle_due(
             open_positions, now, bankroll, locked, settled, equity_index, equity_values,
-            settings,
+            settings, group_committed,
         )
         peak = max(peak, bankroll)
 
@@ -174,7 +199,7 @@ def run_backtest(
         if settings.exit_edge_fraction is not None or settings.stop_loss_move is not None:
             bankroll, locked = _apply_exits(
                 open_positions, market_id, row, now, settings,
-                bankroll, locked, settled, equity_index, equity_values,
+                bankroll, locked, settled, equity_index, equity_values, group_committed,
             )
             peak = max(peak, bankroll)
 
@@ -238,6 +263,10 @@ def run_backtest(
 
         side, sized = best
         notional = min(sized.notional, available)
+        if grouping and settings.max_cluster_exposure < 1.0:
+            group = grouping.get(market_id, market_id)
+            room = settings.max_cluster_exposure * bankroll - group_committed.get(group, 0.0)
+            notional = min(notional, max(room, 0.0))
         if notional < settings.min_notional:
             continue
         shares = notional / sized.effective_price
@@ -259,9 +288,14 @@ def run_backtest(
                 settle_time=settle_time,
                 label=int(row["label"]),
                 entry_market_price=market_price,
+                group=grouping.get(market_id, market_id) if grouping else "",
             )
         )
         locked += notional
+        if grouping:
+            group = grouping.get(market_id, market_id)
+            group_committed[group] = group_committed.get(group, 0.0) + notional
+            peak_group = max(peak_group, group_committed[group] / bankroll)
         traded_markets.add(market_id)
 
     # Anything still open at the end of the sample settles on its known label.
@@ -274,13 +308,16 @@ def run_backtest(
         equity_index,
         equity_values,
         settings,
+        group_committed,
     )
 
     trades = pd.DataFrame(settled) if settled else _empty_trades()
     equity = pd.Series(equity_values, index=pd.Index(equity_index, name="settled_at"), dtype=float)
     if not equity.empty:
         equity = pd.concat([pd.Series([settings.bankroll], index=[frame["timestamp"].min()]), equity])
-    return BacktestResult(trades=trades, equity=equity, summary=_summary(trades, equity))
+    result = BacktestResult(trades=trades, equity=equity, summary=_summary(trades, equity))
+    result.summary["peak_group_exposure"] = peak_group
+    return result
 
 
 def _entry_prices(
@@ -318,6 +355,7 @@ def _apply_exits(
     settled: list[dict],
     equity_index: list[pd.Timestamp],
     equity_values: list[float],
+    group_committed: dict[str, float] | None = None,
 ) -> tuple[float, float]:
     """Close any position in ``market_id`` whose exit condition has triggered.
 
@@ -370,6 +408,10 @@ def _apply_exits(
         profit = proceeds - position.capital
         bankroll += profit
         locked = max(locked - position.capital, 0.0)
+        if position.group and group_committed is not None:
+            group_committed[position.group] = max(
+                group_committed.get(position.group, 0.0) - position.capital, 0.0
+            )
         open_positions.remove(position)
         settled.append(_trade_record(position, now, profit, exit_price, reason, bankroll))
         equity_index.append(now)
@@ -448,6 +490,7 @@ def _settle_due(
     equity_index: list[pd.Timestamp],
     equity_values: list[float],
     settings: TradeConfig,
+    group_committed: dict[str, float] | None = None,
 ) -> tuple[float, float]:
     """Settle every position matured at ``now``, releasing its capital."""
     still_open = []
@@ -460,6 +503,10 @@ def _settle_due(
         profit = proceeds - position.capital
         bankroll += profit
         locked = max(locked - position.capital, 0.0)
+        if position.group and group_committed is not None:
+            group_committed[position.group] = max(
+                group_committed.get(position.group, 0.0) - position.capital, 0.0
+            )
         settled.append(
             _trade_record(
                 position, position.settle_time, profit, float(payoff), "settlement", bankroll
